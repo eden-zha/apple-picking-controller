@@ -8,7 +8,7 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
-set "VIRTUAL_ENV=D:\学校\具身智能项目\后端\apple-picking-backend\venv"
+set "VIRTUAL_ENV=D:\学校\具身智能项目\UI与后端联调原型_v2.0\后端\apple-picking-backend\venv"
 
 if not defined PROMPT set PROMPT=$P$G
 
