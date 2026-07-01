@@ -4,9 +4,9 @@
 
 本项目包含：
 
-- React/Vite 前端 UI：`前端\keyon-apple-ui - 前端`
+- React/Vite 前端 UI：位于 `前端` 目录下，启动器会自动选择包含 `package.json` / `index.html` 且包含 local / remote UI 的当前前端项目
 - FastAPI 后端：`后端\apple-picking-backend`
-- Windows 一键启动脚本：`start_project.bat`
+- Windows 一键启动脚本：`start.bat`
 
 当前版本是“前后端通信与任务状态机联调用原型”，用于验证页面、接口和模拟任务状态流转，不代表已经完成真实硬件闭环。
 
@@ -40,25 +40,29 @@
    python -m pip install -r requirements.txt
    ```
 
-3. 返回项目根目录，进入前端目录并安装前端依赖：
+3. 返回项目根目录，进入当前前端项目目录并安装前端依赖。
+
+   当前前端项目目录应满足：包含 `package.json`，并且是实际包含 local / remote UI 的前端目录。不要进入 `dist`、`src`、`node_modules` 或备份目录。
 
    ```bat
-   cd /d "..\..\前端\keyon-apple-ui - 前端"
+   cd /d "..\..\前端\<当前前端项目目录>"
    npm.cmd install
    ```
 
-4. 返回项目根目录，双击 `start_project.bat`。脚本会分别打开后端和前端两个命令行窗口。
+4. 返回项目根目录，双击 `start.bat`。脚本会自动调用 `launcher.py`，启动后端和前端，并自动打开 <http://localhost:5173>。
 
-脚本会自动优先使用后端目录中的 `.venv`。如果没有 `.venv`，则使用系统环境中的 `python`。现有的本机 `venv` 不是团队运行所必需的内容。
+`launcher.py` 会以自身所在目录作为项目根目录，不依赖 v1.0 / v2.0 等版本号目录，也不依赖固定前端文件夹名。后端固定解析为 `后端\apple-picking-backend`；前端会在 `前端` 目录下自动查找包含 `package.json` 或 `index.html` 的项目，并优先选择包含 local / remote UI 的那个前端。
+
+脚本会自动优先使用后端目录中的 `.venv`。如果没有 `.venv`，则继续尝试后端目录的 `venv`、项目根目录的 `venv`，最后使用当前 Python 环境。现有的本机 `venv` 不是团队运行所必需的内容。
 
 ## 日常运行
 
-1. 双击项目根目录的 `start_project.bat`。
-2. 等待前端和后端窗口显示启动完成。
-3. 打开前端页面：通常为 <http://localhost:5173>。如果 5173 端口被占用，以前端窗口输出的 `Local` 地址为准。
+1. 双击项目根目录的 `start.bat`。
+2. 等待启动窗口显示 `[INFO] Startup complete. You can use the web page now.`。
+3. 浏览器会自动打开前端页面：<http://localhost:5173>。如果浏览器没有自动打开，可手动访问该地址。
 4. 后端接口文档：<http://127.0.0.1:8000/docs>。
 
-关闭对应的命令行窗口即可停止服务。
+启动日志会写入 `logs\backend.log` 和 `logs\frontend.log`。如果 8000 或 5173 端口已被占用，启动器会提示对应服务可能已经在运行。关闭对应的服务进程即可停止服务。
 
 ## 当前真实可用功能
 
@@ -90,10 +94,11 @@
 ## 常见问题
 
 - 提示后端依赖未安装：进入后端目录并在脚本将使用的 Python 环境中执行 `python -m pip install -r requirements.txt`。
-- 提示前端依赖未安装：进入前端目录执行一次 `npm.cmd install`。启动脚本不会自动重复安装依赖。
+- 提示前端依赖未安装：进入 `前端` 目录下实际包含 `package.json` 的当前前端项目，执行一次 `npm.cmd install`。启动脚本不会自动重复安装依赖。
 - 找不到 `python`：安装 Python 3.10+，安装时勾选“Add Python to PATH”，或在后端目录创建 `.venv`。
 - 找不到 `npm.cmd`：安装 Node.js LTS 后重新打开命令行窗口。
-- 前端不是 5173 端口：Vite 会在端口被占用时选择其他端口，请使用前端窗口输出的 `Local` 地址。
+- 前端无法打开：先查看 `logs\frontend.log`。如果 5173 端口已被占用，请关闭占用该端口的旧前端服务后重新双击 `start.bat`。
+
 ## 运行模式说明
 
 ### local模式
