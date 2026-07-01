@@ -5,6 +5,7 @@ from typing import Optional
 from app.models import CommandResponse, LogsResponse, StatusResponse, TargetAppleRequest, TaskCommandRequest
 from app.state_manager import task_state
 from app.task_control import start_robot_task, stop_robot_task
+from app.vision_routes import router as vision_router
 
 app = FastAPI(
     title="Apple Picking Backend Prototype",
@@ -22,6 +23,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(vision_router)
 
 
 @app.get("/status", response_model=StatusResponse)

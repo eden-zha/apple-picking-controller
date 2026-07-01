@@ -1,4 +1,5 @@
 const API_BASE_URL = "http://127.0.0.1:8000";
+export const STATS_WS_URL = "ws://127.0.0.1:8000/ws/stats";
 
 async function request(path, options = {}) {
   try {
@@ -59,4 +60,24 @@ export function getStatus() {
 
 export function getLogs() {
   return request("/logs");
+}
+
+export function startMonitor() {
+  return request("/monitor/start", { method: "POST" });
+}
+
+export function stopMonitor() {
+  return request("/monitor/stop", { method: "POST" });
+}
+
+export function resetStats() {
+  return request("/stats/reset", { method: "POST" });
+}
+
+export function createSnapshot() {
+  return request("/snapshot", { method: "POST" });
+}
+
+export function getExportCsvUrl() {
+  return `${API_BASE_URL}/export/csv`;
 }

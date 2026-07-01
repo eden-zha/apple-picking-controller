@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+/* eslint-disable react-hooks/exhaustive-deps, react-hooks/set-state-in-effect, react-hooks/static-components */
+import { useEffect, useState } from "react";
 import {
   Apple,
   Battery,
@@ -30,13 +31,19 @@ import {
   Activity,
 } from "lucide-react";
 import {
+  getExportCsvUrl,
   getLogs,
   getStatus,
   resetTask,
+  resetStats,
   setTargetMode,
+  startMonitor,
   startTask,
+  stopMonitor,
   stopTask,
+  STATS_WS_URL,
 } from "./api";
+import YoloMockMonitor from "./YoloMockMonitor";
 
 const logoSrc = `${import.meta.env.BASE_URL}keyon-logo.png`;
 
@@ -88,9 +95,9 @@ const BigButton = ({
 export default function App() {
   const [page, setPage] = useState("home");
   const [status, setStatus] = useState("待命");
-  const [picked, setPicked] = useState(0);
+  const [picked] = useState(0);
   const [skipped, setSkipped] = useState(0);
-  const [basket, setBasket] = useState(28);
+  const [basket] = useState(28);
   const [mode, setMode] = useState("只摘精品果");
   const [area, setArea] = useState("A 区");
   const [routeMode, setRouteMode] = useState("自动路线");
@@ -102,6 +109,9 @@ export default function App() {
   const [logs, setLogs] = useState([]);
   const [isPolling, setIsPolling] = useState(false);
   const [executionMode, setExecutionMode] = useState("remote");
+  const [visionStats, setVisionStats] = useState(null);
+  const [visionConnectionStatus, setVisionConnectionStatus] =
+    useState("disconnected");
 
   const normalizeLogs = (value) => {
     if (Array.isArray(value)) return value;
@@ -152,6 +162,37 @@ export default function App() {
     const timer = window.setInterval(refreshStatus, 1000);
     return () => window.clearInterval(timer);
   }, [isPolling, page]);
+
+  useEffect(() => {
+    if (page !== "vision") return undefined;
+
+    const socket = new WebSocket(STATS_WS_URL);
+
+    socket.onopen = () => {
+      setVisionConnectionStatus("connected");
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        setVisionStats(JSON.parse(event.data));
+        setVisionConnectionStatus("connected");
+      } catch {
+        setVisionConnectionStatus("invalid data");
+      }
+    };
+
+    socket.onerror = () => {
+      setVisionConnectionStatus("disconnected");
+    };
+
+    socket.onclose = () => {
+      setVisionConnectionStatus("disconnected");
+    };
+
+    return () => {
+      socket.close();
+    };
+  }, [page]);
 
   const startWork = async () => {
     try {
@@ -249,10 +290,45 @@ export default function App() {
     }
   };
 
+  const handleStartMonitor = async () => {
+    try {
+      setApiError("");
+      setVisionStats(await startMonitor());
+      setApiMessage("视觉 mock 服务已启动。");
+    } catch (error) {
+      setApiError(error.message || "后端未连接或视觉模拟服务未启动");
+    }
+  };
+
+  const handleStopMonitor = async () => {
+    try {
+      setApiError("");
+      setVisionStats(await stopMonitor());
+      setApiMessage("视觉 mock 服务已停止。");
+    } catch (error) {
+      setApiError(error.message || "后端未连接或视觉模拟服务未启动");
+    }
+  };
+
+  const handleResetStats = async () => {
+    try {
+      setApiError("");
+      setVisionStats(await resetStats());
+      setApiMessage("视觉 mock 统计已复位。");
+    } catch (error) {
+      setApiError(error.message || "后端未连接或视觉模拟服务未启动");
+    }
+  };
+
+  const handleExportStats = () => {
+    window.open(getExportCsvUrl(), "_blank", "noopener,noreferrer");
+  };
+
   const navItems = [
     { id: "home", label: "今日任务", icon: Apple },
     { id: "settings", label: "采摘设置", icon: Settings },
     { id: "work", label: "工作中", icon: Bot },
+    { id: "vision", label: "视觉Mock", icon: Camera },
     { id: "alerts", label: "异常处理", icon: AlertTriangle },
     { id: "report", label: "今日成果", icon: BarChart3 },
   ];
@@ -351,7 +427,7 @@ export default function App() {
 
   const Nav = () => (
     <Card className="p-3">
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
         {navItems.map((item) => {
           const Icon = item.icon;
           const active = page === item.id;
@@ -839,6 +915,16 @@ export default function App() {
           {page === "home" && <HomePage />}
           {page === "settings" && <SettingsPage />}
           {page === "work" && <WorkPage />}
+          {page === "vision" && (
+            <YoloMockMonitor
+              stats={visionStats}
+              connectionStatus={visionConnectionStatus}
+              onStart={handleStartMonitor}
+              onStop={handleStopMonitor}
+              onReset={handleResetStats}
+              onExport={handleExportStats}
+            />
+          )}
           {page === "alerts" && <AlertsPage />}
           {page === "report" && <ReportPage />}
         </div>
