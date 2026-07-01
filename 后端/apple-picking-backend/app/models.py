@@ -26,6 +26,25 @@ class ExecutionMode(str, Enum):
     remote = "remote"
 
 
+class RobotStatus(BaseModel):
+    running: bool = False
+    fps: float = 0
+    step: int = 0
+    latency: Optional[float] = None
+    source: str = "unavailable"
+
+
+class PolicyStatus(BaseModel):
+    running: bool = False
+    loaded: bool = False
+    paused: bool = False
+    model_path: Optional[str] = None
+    inference_hz: float = 0
+    loop_hz: float = 0
+    last_error: Optional[str] = None
+    source: str = "policy_runtime_service"
+
+
 class StatusResponse(BaseModel):
     state: TaskState
     progress: int = Field(ge=0, le=100)
@@ -33,6 +52,18 @@ class StatusResponse(BaseModel):
     target_mode: Optional[TargetMode] = None
     current_step: str
     logs: List[str]
+    robot_status: RobotStatus = Field(default_factory=RobotStatus)
+    policy_status: PolicyStatus = Field(default_factory=PolicyStatus)
+
+
+class UIStateResponse(BaseModel):
+    task_state: TaskState
+    progress: int = Field(ge=0, le=100)
+    mode: ExecutionMode
+    target_mode: Optional[TargetMode] = None
+    logs: List[str]
+    robot_status: RobotStatus
+    policy_status: PolicyStatus
 
 
 class LogsResponse(BaseModel):
@@ -42,7 +73,7 @@ class LogsResponse(BaseModel):
 class CommandResponse(BaseModel):
     success: bool
     message: str
-    status: StatusResponse
+    status: UIStateResponse
 
 
 class TaskCommandRequest(BaseModel):

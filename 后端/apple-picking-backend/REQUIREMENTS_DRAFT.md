@@ -1,70 +1,77 @@
-# 后端需求草案
+# 后端需求说明
+
+本系统为真实机器人AI控制系统：
+控制链采用 policy_runtime_service + robot_client 的闭环执行架构。
+mock_task 仅用于UI兜底显示，不参与任何机器人控制。
 
 ## 1. 当前目标
 
-当前后端需求还没有完全确定，本文件用于记录暂定想法，后续根据组员讨论结果修改。
+后端必须支撑真实 SO-ARM101 机器人 AI 控制闭环，是任务控制、policy 推理入口和机器人执行入口之间的协调层。
 
-## 2. 可能需要的功能
+## 2. 必须支持的能力
 
-后端可能需要支持：
+- 查询当前系统状态、机器人状态和 policy 状态。
+- 接收 UI 启动任务指令。
+- 接收 UI 停止任务指令。
+- 接收 UI 复位系统指令。
+- 接收 UI 选择目标采摘模式指令。
+- 通过 `task_control` 进入真实控制链。
+- 通过 `policy_runtime_service` 执行 LeRobot ACT policy 推理。
+- 通过 `robot_client` 读取 SO-ARM101 观测并发送动作。
+- 通过 `status_fusion` 向 UI 提供融合状态。
+- 在状态源不可用时允许 UI fallback 显示，但不允许 fallback 参与执行。
 
-* 查询当前系统状态。
-* 接收 UI 启动任务的指令。
-* 接收 UI 停止任务的指令。
-* 接收 UI 复位系统的指令。
-* 接收 UI 选择任务类型的指令。
-* 返回任务进度。
-* 返回运行日志。
-* 模拟小车和机械臂执行流程。
-* 为后续真实硬件控制预留接口。
+## 3. 标准控制链
 
-## 3. 可能的状态设计
+```text
+frontend
+  -> FastAPI backend
+  -> task_control
+  -> policy_runtime_service
+  -> LeRobot ACT policy inference
+  -> robot_client
+  -> SO-ARM101 robot execution
+```
 
-暂定状态包括：
+## 4. 标准展示链
 
-* IDLE：空闲。
-* MOVING：小车移动中。
-* READY：设备到位，准备执行。
-* PICKING：采摘中。
-* PLACING：放置中。
-* DONE：任务完成。
-* STOPPED：任务停止。
-* ERROR：异常。
+```text
+robot_status + backend_state + optional mock fallback
+  -> status_fusion
+  -> websocket / HTTP
+  -> frontend UI
+```
 
-这些状态只是草案，后续可以根据真实流程调整。
+## 5. local / remote 行为
 
-## 4. 可能的接口设计
+local：
 
-以下接口只是草案，不是最终设计：
+```text
+backend -> policy_runtime_service（本机进程） -> robot_client -> SO-ARM101
+```
 
-* GET /status：查询状态。
-* POST /start_task：启动任务。
-* POST /stop：停止任务。
-* POST /reset：复位。
-* POST /select_task：选择任务类型。
+remote：
 
-后续需要根据 UI 和设备控制需求确认接口名称、参数和返回格式。
+```text
+backend -> HTTP -> Robot PC -> policy_runtime_service（远程进程） -> robot_client -> SO-ARM101
+```
 
-## 5. 暂时不做的内容
+local 和 remote 只表示部署位置不同，不能改变控制链语义。
 
-当前暂时不做：
+## 6. 接口需求
 
-* 不直接控制真实机械臂。
-* 不直接控制真实小车。
-* 不直接写复杂 ROS 通信。
-* 不做数据库。
-* 不做用户登录。
-* 不做复杂前端页面。
+- `GET /status`：返回后端任务状态、robot_status、policy_status 和日志。
+- `POST /set_target_apple`：设置目标采摘模式。
+- `POST /start_task`：启动真实 policy 控制任务。
+- `POST /stop`：停止真实 policy 控制任务。
+- `POST /reset`：复位后端任务状态。
+- `GET /logs`：返回运行日志。
+- WebSocket：推送 `status_fusion` 的融合状态。
 
-## 6. 后续需要向组员确认的问题
+## 7. 禁止项
 
-1. UI 需要哪些按钮？
-2. UI 需要显示哪些状态？
-3. 小车是否已经有控制接口？
-4. 机械臂是否已经有控制接口？
-5. 后端需要连接 ROS，还是只需要 HTTP/TCP？
-6. 任务流程是“小车先到位再机械臂采摘”，还是后端只负责机械臂？
-7. 是否需要区分红苹果和绿苹果？
-8. 是否需要保存实验记录？
-9. 是否需要展示错误信息？
-10. 最终演示时，后端需要真实控制设备，还是只展示通信和状态流程？
+- local 模式必须描述为本机真实 policy 闭环部署。
+- 禁止把 remote 模式描述为没有 policy runtime 的 robot PC。
+- `mock_task` 只能用于 UI fallback 展示。
+- 禁止让 frontend 直接控制机器人。
+- 禁止让 fallback 进入 action / control chain。

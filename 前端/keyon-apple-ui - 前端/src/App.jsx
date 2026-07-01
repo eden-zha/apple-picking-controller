@@ -36,6 +36,7 @@ import {
   setTargetMode,
   startTask,
   stopTask,
+  subscribeStatus,
 } from "./api";
 
 const logoSrc = `${import.meta.env.BASE_URL}keyon-logo.png`;
@@ -111,25 +112,25 @@ export default function App() {
 
   const applyStatus = (data) => {
     if (!data) return;
+    const nextStatus = data.status || data;
+    const nextTaskState = nextStatus.task_state || nextStatus.state;
 
-    setTaskStatus(data);
-    if (data.message) {
-      setStatus(data.message);
-    } else if (data.state) {
-      setStatus(stateLabels[data.state] || data.state);
+    setTaskStatus(nextStatus);
+    if (nextTaskState) {
+      setStatus(stateLabels[nextTaskState] || nextTaskState);
     }
 
-    if (data.target_mode) {
+    if (nextStatus.target_mode) {
       const nextMode =
-        data.target_mode === "red_only" ? "只摘精品果" : "尽量多摘";
+        nextStatus.target_mode === "red_only" ? "只摘精品果" : "尽量多摘";
       setMode(nextMode);
     }
 
-    if (data.logs) {
-      setLogs(normalizeLogs(data.logs));
+    if (nextStatus.logs) {
+      setLogs(normalizeLogs(nextStatus.logs));
     }
 
-    if (data.state === "DONE" || data.state === "STOPPED") {
+    if (nextTaskState === "DONE" || nextTaskState === "STOPPED") {
       setIsPolling(false);
     }
   };
@@ -153,11 +154,27 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [isPolling, page]);
 
+  useEffect(() => {
+    if (page !== "work") return undefined;
+
+    return subscribeStatus({
+      onMessage: (data) => {
+        applyStatus(data);
+        setApiError("");
+      },
+      onError: () => {
+        setApiError("WebSocket 未连接，已使用 HTTP 状态刷新兜底。");
+        setIsPolling(true);
+      },
+    });
+  }, [page]);
+
   const startWork = async () => {
     try {
       setApiError("");
       setApiMessage("");
-      await startTask(executionMode);
+      const data = await startTask(executionMode);
+      applyStatus(data);
       setStatus("任务已启动，正在获取状态");
       setPage("work");
       setIsPolling(true);
@@ -194,12 +211,9 @@ export default function App() {
     }
 
     try {
-      await setTargetMode(targetMode);
+      const data = await setTargetMode(targetMode);
+      applyStatus(data);
       setApiMessage(`已设置目标：${targetModeLabels[targetMode]}`);
-      setTaskStatus((current) => ({
-        ...(current || {}),
-        target_mode: targetMode,
-      }));
     } catch (error) {
       setApiError(error.message || "后端未连接，请先启动 FastAPI 服务");
     }
@@ -213,7 +227,8 @@ export default function App() {
   const handleStopTask = async () => {
     try {
       setApiError("");
-      await stopTask(executionMode);
+      const data = await stopTask(executionMode);
+      applyStatus(data);
       setStatus("已停止");
       setIsPolling(false);
       await refreshStatus();
@@ -227,7 +242,8 @@ export default function App() {
     try {
       setApiError("");
       setApiMessage("");
-      await resetTask();
+      const data = await resetTask();
+      applyStatus(data);
       setTaskStatus(null);
       setLogs([]);
       setStatus("待命");
@@ -395,8 +411,10 @@ export default function App() {
     ? Math.min(Math.max(taskStatus.progress, 0), 100)
     : Math.min(25 + picked, 100);
 
-  const backendStateText = taskStatus?.state
-    ? stateLabels[taskStatus.state] || taskStatus.state
+  const backendState = taskStatus?.task_state || taskStatus?.state;
+
+  const backendStateText = backendState
+    ? stateLabels[backendState] || backendState
     : "未连接";
 
   const backendTargetText = taskStatus?.target_mode
@@ -611,10 +629,10 @@ export default function App() {
       <div className="grid gap-5">
         <div className="grid grid-cols-2 gap-5">
           {[
-            ["后端状态", backendStateText, Activity],
+            ["融合状态", backendStateText, Activity],
             ["任务进度", `${progressValue}%`, Gauge],
             ["目标模式", backendTargetText, Apple],
-            ["当前步骤", taskStatus?.current_step || "暂无", Timer],
+            ["机器人状态", taskStatus?.robot_status?.running ? "运行中" : "未运行", Timer],
           ].map(([name, value, Icon]) => (
             <Card key={name} className="p-6">
               <Icon className="mb-5 h-8 w-8 text-red-300" />

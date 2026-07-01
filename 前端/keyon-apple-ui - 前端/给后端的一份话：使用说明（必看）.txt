@@ -1,271 +1,75 @@
-目前这个UI demo版本主要用于前端界面展示、交互逻辑说明，以及后续和后端功能进行对接。目前项目还没有接入真实后端接口，界面里的电量、果筐容量、采摘数量、异常提示等数据都是前端本地模拟数据。
+本系统为真实机器人AI控制系统：
+控制链采用 policy_runtime_service + robot_client 的闭环执行架构。
+mock_task 仅用于UI兜底显示，不参与任何机器人控制。
 
-一、项目类型
+一、前端在系统中的位置
 
-这是一个本地运行的前端项目，技术栈为：
+前端是 SO-ARM101 苹果采摘系统的 UI 层，只负责展示状态和发送任务意图。
+前端不能直接控制机器人，不能生成机械臂 action，也不能绕过后端调用硬件。
 
-React
-Vite
-Tailwind CSS
-lucide-react 图标库
+真实控制链必须是：
 
-这些前端依赖不需要单独手动下载，只要电脑装好 Node.js（没有装的请看下文），然后在项目目录里运行 npm install，项目会根据 package.json 自动安装所需依赖。
+frontend
+  -> FastAPI backend
+  -> task_control
+  -> policy_runtime_service
+  -> LeRobot ACT policy inference
+  -> robot_client
+  -> SO-ARM101 robot execution
 
-二、How to 安装 Node.js
+二、UI 展示链
 
-1. 安装 Node.js
+前端接收的是展示链数据：
 
-打开浏览器，搜索 Node.js，进入官网，下载 Windows Installer (.msi) 安装包。
+robot_status + backend_state + optional mock fallback
+  -> status_fusion
+  -> websocket / HTTP
+  -> frontend UI
 
-建议下载 LTS 版本。
+mock fallback 只用于 UI 兜底显示，不参与 action/control。
 
-安装时一路 Next / Install / Finish 即可，不需要修改复杂设置。
+三、local / remote 的统一含义
 
-安装完成后，可以按 Win + R，输入 cmd，打开命令提示符，然后输入：
+local 模式：
 
-node -v
+backend -> policy_runtime_service（本机进程） -> robot_client -> SO-ARM101
 
-如果出现类似 v24.16.0 或 v20.x.x 的版本号，说明 Node.js 安装成功。
+remote 模式：
 
-继续输入：
+backend -> HTTP -> Robot PC -> policy_runtime_service（远程进程） -> robot_client -> SO-ARM101
 
-npm -v
+local 和 remote 都进入 policy_runtime_service + robot_client 闭环，二者只是同一套真实 AI 控制系统的不同部署方式。
 
-如果出现类似 11.13.0 或 10.x.x 的版本号，说明 npm 也安装成功。
+四、前端需要调用的接口
 
-说明：
-Node.js 是运行前端项目所需的环境。
-npm 是 Node.js 自带的包管理工具，用来安装 React、Vite、Tailwind、lucide-react 等依赖。
+- POST /set_target_apple：设置目标采摘模式。
+- POST /start_task：启动任务，请求体携带 mode。
+- POST /stop：停止任务，请求体携带 mode。
+- POST /reset：复位后端任务状态。
+- GET /status：获取融合后的状态。
+- GET /logs：获取运行日志。
+- WebSocket：接收后端推送的融合状态。
 
-建议在VS code中打开，因为别的遇到了问题我不会QWQ
+五、前端展示数据约束
 
-三、我发给你们的文件说明
+电量、天气、果筐容量、剩余时间、区域、路线、异常提示等页面数据必须来自后端状态源或明确标注为 UI fallback。
+如果使用 mock fallback，只能用于页面显示，不能被解释为控制系统已经执行真实动作。
 
-这个项目文件夹中主要包括：
+六、运行方式
 
-1. src/
-   这里是主要前端源码。当前最核心的界面代码在 src/App.jsx 里，包括首页、采摘设置、工作中、异常处理、今日成果等页面，以及按钮交互、状态切换和弹窗逻辑。
-
-2. public/
-   这里放公共资源文件。目前 Logo 图片在 public/keyon-logo.png，界面左上角的品牌铭牌会读取这个文件。请不要随意删除或改名。
-
-3. dist/
-   这是已经打包出来的展示版文件夹，可以用于预览成品效果。但如果要继续开发、接接口、改逻辑，主要还是看 src 里的源码。
-
-4. package.json / package-lock.json
-   这是项目依赖和运行脚本说明。第一次运行项目时，需要通过 npm install 根据这两个文件自动安装依赖。
-
-5. vite.config.js
-   这是 Vite 配置文件，里面已经配置了 Tailwind 和本地打包路径。
-
-四、哪些文件需要保留
-
-请保留：
-
-src/
-public/
-dist/
-index.html
-package.json
-package-lock.json
-vite.config.js
-eslint.config.js
-README.md
-.gitignore
-给后端的一份话：使用说明（必看）.txt
-
-其中最重要的是：
-
-给后端的一份话：使用说明（必看）.txt
-src/
-public/
-package.json
-package-lock.json
-vite.config.js
-index.html
-
-五、关于 node_modules
-
-我发给你们时可能不会包含 node_modules 文件夹。
-
-node_modules 是 npm install 自动生成的依赖文件夹，体积很大，不适合直接传输。
-
-如果你们打开项目后发现没有 node_modules，这是正常的。只需要在项目根目录运行：
+第一次运行：
 
 npm install
-
-它会自动生成 node_modules 文件夹。
-
-六、如何运行项目
-
-请用 VS Code 打开项目根目录。
-
-项目根目录是包含 package.json 的那个文件夹，你可以直接选中文件夹”keyon-apple-ui - 前端“，不要只打开 src，也不要只打开 dist。
-
-打开方式：
-
-VS Code → File → Open Folder → 选择项目文件夹
-
-然后打开终端：
-
-Terminal → New Terminal
-
-建议 Windows 用户使用 cmd 终端，不建议使用 PowerShell。
-
-如果 VS Code 默认打开的是 PowerShell，可能会遇到 npm.ps1 被禁止运行的问题。遇到这种情况，请切换到 Command Prompt / cmd。
-
-七、第一次运行
-
-第一次运行前，在终端输入：
-
-npm install
-
-这一步会自动安装项目需要的依赖，包括 React、Vite、Tailwind CSS、lucide-react 等。
-
-注意：
-这一步需要联网。
-安装完成后，后续本地运行一般不需要一直联网。
-
-八、启动开发版
-
-安装完成后，输入：
-
 npm run dev
 
-终端会出现类似：
+默认地址：
 
 http://localhost:5173/
 
-按住ctrl再用鼠标打开这个地址，就可以看到 UI 界面。
+七、主要文件
 
-开发版适合继续修改代码、调试接口、接后端功能。
-
-九、查看打包展示版
-
-如果只是想查看打包后的展示效果，可以输入：
-
-npm run build
-
-成功后再输入：
-
-npm run preview
-
-终端会出现类似：
-
-http://localhost:4173/
-
-打开这个地址，就可以查看展示版。
-
-说明：
-5173 通常是开发版地址。
-4173 通常是打包预览版地址。
-
-十、如果运行报错怎么办
-
-1. 如果提示 npm 不是内部或外部命令
-
-说明 Node.js 没装好，或者安装后没有重启终端。
-
-请重新打开 cmd，输入：
-
-node -v
-npm -v
-
-确认是否能显示版本号。
-
-2. 如果 PowerShell 报 npm.ps1 禁止运行
-
-请不要在 PowerShell 里运行，切换到 cmd 终端。
-
-在 VS Code 终端右上角选择 Command Prompt / cmd，然后重新运行命令。
-
-3. 如果提示缺少依赖
-
-请运行：
-
-npm install
-
-4. 如果 dist 不存在
-
-请运行：
-
-npm run build
-
-5. 如果 Logo 不显示
-
-请确认文件存在：
-
-public/keyon-logo.png
-
-不要改名，不要删除。
-
-十一、当前 UI 功能范围
-
-目前 UI 包含以下页面：
-
-1. 今日任务
-   展示设备在线状态、当前任务、天气、电量、信号、果筐容量，并提供“开始采摘”和“紧急停止”按钮。
-
-2. 采摘设置
-   包含成熟度选择、区域选择和路线模式选择。
-
-3. 工作中
-   展示当前采摘状态、进度、已采摘数量、跳过数量、果筐容量、预计剩余时间，并提供暂停、跳过、人工接管等操作。
-
-4. 异常处理
-   模拟几种适合果农理解的异常提示，例如“前方被树叶挡住了”“果筐快满了”“机械臂碰到树枝”“摄像头需要擦拭”。
-
-5. 今日成果
-   展示采摘总量、精品果数量、跳过数量、工作时长，并可以生成今日报告弹窗。
-
-十二、希望后端后续接入的方向
-
-这个 UI 现在只是前端 demo，后续希望你们把模拟数据替换成真实数据或接口数据。比较重要的接口方向包括：
-
-1. 设备状态
-   电量、在线状态、信号状态、机械臂状态、果筐容量。
-
-2. 任务状态
-   当前区域、当前路线、当前采摘模式、是否正在工作、是否暂停、是否异常。
-
-3. 采摘统计
-   已采摘数量、精品果数量、跳过数量、工作时长、预计剩余时间。
-
-4. 异常信息
-   异常类型、异常说明、推荐处理动作，例如重试、跳过、回安全姿态、呼叫人工。
-
-5. 控制指令
-   开始采摘、暂停、继续、紧急停止、跳过当前树、人工接管、返回起点。
-
-十三、设计说明
-
-这个 UI 的设计目标不是做复杂后台，而是做一个适合果农和果园工人使用的田间平板中控。整体原则是大按钮、强图标、少文字、低学习成本。
-
-界面尽量避免技术术语。例如不写“视觉识别失败”，而是写“前方被树叶挡住了”，让用户能直接理解机器人现在发生了什么，以及下一步该怎么做。
-
-左上角已经放入“颗沿 Keyon”的品牌 Logo，作为中控界面的品牌识别区域。后续如果继续开发，请尽量保留这个品牌区域和当前整体视觉方向。
-
-十四、简单运行流程总结
-
-如果是第一次运行：
-
-1. 安装 Node.js
-2. 用 VS Code 打开项目根目录
-3. 打开 cmd 终端
-4. 输入 npm install
-5. 输入 npm run dev
-6. 打开 http://localhost:5173/
-
-如果只是查看展示版：
-
-1. 输入 npm run build
-2. 输入 npm run preview
-3. 打开 http://localhost:4173/
-
-十五、备注
-
-这个 demo 当前不依赖真实后端接口，所有数据都是前端模拟数据。建议后续可以根据你们的接口结构，把 src/App.jsx 中的本地状态和模拟数据替换为 API 请求或 WebSocket 数据。
-后端做不出也没关系，有交互界面已经及格了
-很重要的一点，我很cool
-你们也很cool
-加油(ง๑ •̀_•́)ง
+src/App.jsx：主 UI 和交互逻辑。
+src/api.js：后端 API 封装。
+public/：Logo 和图标资源。
+package.json：依赖和脚本。
+vite.config.js：Vite 配置。

@@ -1,4 +1,5 @@
 const API_BASE_URL = "http://127.0.0.1:8000";
+const WS_BASE_URL = "ws://127.0.0.1:8000";
 
 async function request(path, options = {}) {
   try {
@@ -59,4 +60,22 @@ export function getStatus() {
 
 export function getLogs() {
   return request("/logs");
+}
+
+export function subscribeStatus({ onMessage, onError }) {
+  const socket = new WebSocket(`${WS_BASE_URL}/ws/status`);
+
+  socket.addEventListener("message", (event) => {
+    try {
+      onMessage(JSON.parse(event.data));
+    } catch (error) {
+      onError?.(error);
+    }
+  });
+
+  socket.addEventListener("error", (error) => {
+    onError?.(error);
+  });
+
+  return () => socket.close();
 }

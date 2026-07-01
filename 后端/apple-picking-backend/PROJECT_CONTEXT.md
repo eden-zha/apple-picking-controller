@@ -1,56 +1,68 @@
-# 苹果采摘装置后端通信原型项目说明
+# 项目背景与系统边界
+
+本系统为真实机器人AI控制系统：
+控制链采用 policy_runtime_service + robot_client 的闭环执行架构。
+mock_task 仅用于UI兜底显示，不参与任何机器人控制。
 
 ## 1. 项目背景
 
-本项目是一个农业智能装备/具身智能方向的小组项目，目标是实现小车与机械臂协同完成苹果采摘任务，并通过 UI 展示当前任务状态、进度和控制按钮。
+本项目是具身智能方向的小组项目，目标是通过 UI、后端、ACT policy 和 SO-ARM101 机械臂完成真实苹果采摘控制闭环。
 
-系统整体可能包括：
+系统面向真实机器人执行。UI 负责发起任务意图和展示状态，真实动作必须由 policy runtime 推理后交给 robot client 执行。
 
-* UI 前端：负责展示状态、进度，并发送控制指令。
-* 后端服务：负责接收 UI 指令，维护任务状态，并将控制命令转发给小车和机械臂。
-* 小车：负责移动到采摘位置。
-* 机械臂：负责执行苹果采摘和放置动作。
-* 视觉模块：负责识别目标苹果。
+## 2. 标准控制链
 
-当前阶段主要目标是先梳理后端在系统中的位置和可能承担的功能，具体接口和功能需要后续与组员进一步确认。
+```text
+frontend
+  -> FastAPI backend
+  -> task_control
+  -> policy_runtime_service
+  -> LeRobot ACT policy inference
+  -> robot_client
+  -> SO-ARM101 robot execution
+```
 
-## 2. 后端可能承担的作用
+组件职责：
 
-后端可能作为 UI 和设备控制之间的中间层，承担以下作用：
+1. `frontend`：展示状态，发送目标模式、开始、停止、复位等任务意图。
+2. `FastAPI backend`：提供 API 和 WebSocket，维护任务状态。
+3. `task_control`：统一编排任务生命周期。
+4. `policy_runtime_service`：唯一 AI 推理入口，加载并运行 LeRobot ACT policy。
+5. `robot_client`：唯一机械臂硬件接口，读取观测并发送动作。
+6. `SO-ARM101`：真实执行端。
 
-1. 接收 UI 发来的控制指令。
-2. 维护当前任务状态。
-3. 将控制指令转发给小车、机械臂或视觉模块。
-4. 将设备状态、任务进度、运行日志返回给 UI。
-5. 为后续真实硬件接入预留接口。
+## 3. UI 展示链
 
-## 3. 当前不确定内容
+```text
+robot_status + backend_state + optional mock fallback
+  -> status_fusion
+  -> websocket / HTTP
+  -> frontend UI
+```
 
-以下内容还需要与组员确认：
+展示链和控制链分离。mock fallback 可以帮助 UI 在状态源暂不可用时保持可读，但它不能生成 action，不能控制机械臂，也不能替代 policy runtime。
 
-1. UI 具体需要哪些按钮和展示信息。
-2. 后端是否需要直接连接小车。
-3. 后端是否需要直接连接机械臂。
-4. 后端是否需要连接 ROS。
-5. 小车、机械臂、视觉模块之间目前已有的通信方式。
-6. 是否需要实时推送状态，还是 UI 定时查询状态即可。
-7. 是否需要支持红苹果、绿苹果等不同任务模式。
-8. 是否需要保存日志或实验数据。
+## 4. local / remote 部署
 
-## 4. 当前建议技术方向
+local：
 
-暂定后端可以使用 Python FastAPI 实现，因为它适合快速搭建 HTTP 接口，也方便后续和 UI 连接。
+```text
+backend -> policy_runtime_service（本机进程） -> robot_client -> SO-ARM101
+```
 
-当前建议先做最小原型：
+remote：
 
-UI → FastAPI 后端 → 模拟状态机 → 后续替换为真实设备控制接口
+```text
+backend -> HTTP -> Robot PC -> policy_runtime_service（远程进程） -> robot_client -> SO-ARM101
+```
 
-但这只是初步建议，不是最终方案。
+local / remote 是同一套 AI 控制系统的不同部署方式，控制语义保持一致。
 
 ## 5. 当前原则
 
-1. 先做最小可运行原型。
-2. 不提前承担过多复杂功能。
-3. 不在需求未明确时直接接入真实硬件。
-4. 先保证接口清楚、状态清楚、流程能展示。
-5. 后续根据组员讨论结果逐步修改。
+1. 所有真实控制都必须经过 `policy_runtime_service`。
+2. 所有硬件执行都必须经过 `robot_client`。
+3. `mock_task` 只用于 UI fallback，不参与任何控制链。
+4. 前端不直接控制机器人。
+5. remote 模式下 Robot PC 必须运行远程 policy runtime。
+6. 当真实机器人、观测或 policy 不可用时，系统应进入暂停、停止或错误状态。

@@ -3,20 +3,24 @@ from collections import deque
 from datetime import datetime
 from typing import List, Optional, Tuple
 
-from app.models import StatusResponse, TargetMode, TaskState
+from app.adapters.robot_client import RawRobotState
+from app.models import ExecutionMode, PolicyStatus, RobotStatus, StatusResponse, TargetMode, TaskState
 
 
 class StateManager:
     def __init__(self) -> None:
         self._state = TaskState.IDLE
         self._progress = 0
-        self._message = "等待任务开始。"
+        self._message = "Waiting for task start."
+        self._mode = ExecutionMode.remote
         self._target_mode = None  # type: Optional[TargetMode]
-        self._current_step = "等待开始"
-        self._logs = deque(maxlen=50)  # type: deque
+        self._current_step = "Waiting"
+        self._robot_status = RobotStatus(source="unavailable")
+        self._policy_status = PolicyStatus()
+        self._logs = deque(maxlen=50)
         self._active_task = None  # type: Optional[asyncio.Task]
         self._lock = asyncio.Lock()
-        self.add_log_sync("系统初始化完成。")
+        self.add_log_sync("System initialized.")
 
     def _format_log(self, message: str) -> str:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -37,10 +41,21 @@ class StateManager:
             target_mode=self._target_mode,
             current_step=self._current_step,
             logs=list(self._logs),
+            robot_status=self._robot_status,
+            policy_status=self._policy_status,
         )
+
+    def get_robot_status(self) -> RobotStatus:
+        return self._robot_status
+
+    def get_policy_status(self) -> PolicyStatus:
+        return self._policy_status
 
     def get_logs(self) -> List[str]:
         return list(self._logs)
+
+    def get_mode(self) -> ExecutionMode:
+        return self._mode
 
     async def set_running_task(self, task: asyncio.Task) -> None:
         async with self._lock:
@@ -54,31 +69,67 @@ class StateManager:
     async def can_start(self) -> Tuple[bool, str]:
         async with self._lock:
             if self._target_mode is None:
-                return False, "请先通过 /set_target_apple 选择本轮任务模式。"
+                return False, "Select target_mode before starting a task."
             if self._state == TaskState.IDLE:
-                return True, "可以启动任务。"
+                return True, "Task can start."
             if self._state == TaskState.RUNNING:
-                return False, "任务已经在运行。"
-            if self._state in {TaskState.DONE, TaskState.STOPPED}:
-                return False, "当前任务已结束或已停止，需要先 reset 后才能重新开始。"
-            return False, "当前状态不允许启动任务。"
+                return False, "Task is already running."
+            if self._state in {TaskState.DONE, TaskState.STOPPED, TaskState.ERROR}:
+                return False, "Reset is required before starting another task."
+            return False, "Current state does not allow task start."
 
-    async def start_running(self) -> None:
+    async def start_running(self, current_step: str = "robot_client execution running") -> None:
         async with self._lock:
             self._state = TaskState.RUNNING
             self._progress = 0
-            self._current_step = "启动模拟识别流程"
-            self._message = f"任务运行中，目标模式为 {self._target_mode.value}。"
-            self.add_log_sync(f"任务启动，目标模式：{self._target_mode.value}，进入 RUNNING 状态。")
+            self._current_step = current_step
+            target = self._target_mode.value if self._target_mode else "unset"
+            self._message = f"Task running with target_mode={target}."
+            self.add_log_sync(f"Task entered RUNNING through robot_client, target_mode={target}.")
+
+    async def set_mode(self, mode: ExecutionMode) -> None:
+        async with self._lock:
+            self._mode = mode
+
+    async def set_robot_status_from_raw(self, raw_robot_state: RawRobotState) -> None:
+        async with self._lock:
+            self._robot_status = RobotStatus(
+                running=raw_robot_state.is_running,
+                fps=raw_robot_state.fps,
+                step=raw_robot_state.step_count,
+                latency=raw_robot_state.latency,
+                source="robot_client",
+            )
+
+    async def mark_robot_status_unavailable(self) -> None:
+        async with self._lock:
+            self._robot_status = RobotStatus(source="unavailable")
+
+    async def set_policy_status(self, policy_status: PolicyStatus) -> None:
+        async with self._lock:
+            self._policy_status = policy_status
+
+    async def apply_fused_task_state(
+        self,
+        state: TaskState,
+        progress: int,
+        current_step: str,
+    ) -> None:
+        async with self._lock:
+            self._state = state
+            self._progress = max(0, min(100, progress))
+            self._current_step = current_step
+            self._message = f"Task state={state.value}, progress={self._progress}%."
+            self.add_log_sync(f"Fused state updated: {state.value} / {self._progress}% / {current_step}.")
 
     async def update_progress(self, progress: int, current_step: str) -> bool:
         async with self._lock:
             if self._state != TaskState.RUNNING:
                 return False
-            self._progress = progress
+            self._progress = max(0, min(100, progress))
             self._current_step = current_step
-            self._message = f"任务运行中，当前进度 {progress}%。"
-            self.add_log_sync(f"任务进度更新为 {progress}%，当前步骤：{current_step}。")
+            self._message = f"Task running, progress={self._progress}%."
+            self.add_log_sync(f"Progress updated: {self._progress}% / {current_step}.")
             return True
 
     async def complete(self) -> None:
@@ -87,25 +138,35 @@ class StateManager:
                 return
             self._state = TaskState.DONE
             self._progress = 100
-            self._current_step = "模拟任务完成"
-            self._message = "任务完成。"
-            self.add_log_sync("任务完成，进入 DONE 状态。")
+            self._current_step = "Task complete"
+            self._message = "Task complete."
+            self.add_log_sync("Task entered DONE.")
+
+    async def mark_error(self, message: str) -> None:
+        async with self._lock:
+            if self._active_task is not None:
+                self._active_task.cancel()
+                self._active_task = None
+            self._state = TaskState.ERROR
+            self._message = message
+            self._current_step = "Error"
+            self.add_log_sync(message)
 
     async def stop(self) -> Tuple[bool, str]:
         async with self._lock:
             if self._state != TaskState.RUNNING:
-                message = "当前没有正在运行的任务。"
+                message = "No task is currently running."
                 self.add_log_sync(message)
                 return False, message
 
             self._state = TaskState.STOPPED
-            self._message = "任务已停止。"
-            self._current_step = "任务已停止"
+            self._message = "Task stopped."
+            self._current_step = "Stopped"
             if self._active_task is not None:
                 self._active_task.cancel()
                 self._active_task = None
-            self.add_log_sync("任务被停止，进入 STOPPED 状态。")
-            return True, "任务已停止。"
+            self.add_log_sync("Task entered STOPPED.")
+            return True, "Task stopped."
 
     async def reset(self) -> None:
         async with self._lock:
@@ -114,14 +175,17 @@ class StateManager:
                 self._active_task = None
             self._state = TaskState.IDLE
             self._progress = 0
-            self._message = "等待任务开始。"
-            self._current_step = "等待开始"
-            self.add_log_sync("系统复位，进入 IDLE 状态。")
+            self._mode = ExecutionMode.remote
+            self._message = "Waiting for task start."
+            self._current_step = "Waiting"
+            self._robot_status = RobotStatus(source="unavailable")
+            self._policy_status = PolicyStatus()
+            self.add_log_sync("System reset to IDLE.")
 
     async def set_target_mode(self, target_mode: TargetMode) -> None:
         async with self._lock:
             self._target_mode = target_mode
-            self.add_log_sync(f"目标采摘模式已设置为：{target_mode.value}。")
+            self.add_log_sync(f"target_mode set to {target_mode.value}.")
 
 
 task_state = StateManager()
