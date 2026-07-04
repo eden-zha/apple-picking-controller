@@ -1,5 +1,5 @@
-const API_BASE_URL = "http://127.0.0.1:8000";
-const WS_BASE_URL = "ws://127.0.0.1:8000";
+const API_BASE_URL = (import.meta.env.VITE_ROBOT_BACKEND_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const WS_BASE_URL = API_BASE_URL.replace(/^http/, "ws");
 
 async function request(path, options = {}) {
   try {
@@ -29,24 +29,22 @@ async function request(path, options = {}) {
   }
 }
 
-export function setTargetMode(targetMode) {
+export function setTargetMaturity(targetMaturity) {
   return request("/set_target_apple", {
     method: "POST",
-    body: JSON.stringify({ target_mode: targetMode }),
+    body: JSON.stringify({ target_maturity: targetMaturity }),
   });
 }
 
-export function startTask(mode) {
+export function startTask() {
   return request("/start_task", {
     method: "POST",
-    body: JSON.stringify({ mode }),
   });
 }
 
-export function stopTask(mode) {
+export function stopTask() {
   return request("/stop", {
     method: "POST",
-    body: JSON.stringify({ mode }),
   });
 }
 
@@ -79,3 +77,23 @@ export function subscribeStatus({ onMessage, onError }) {
 
   return () => socket.close();
 }
+
+export function subscribeVision({ onMessage, onError }) {
+  const socket = new WebSocket(`${WS_BASE_URL}/ws/vision`);
+
+  socket.addEventListener("message", (event) => {
+    try {
+      onMessage(JSON.parse(event.data));
+    } catch (error) {
+      onError?.(error);
+    }
+  });
+
+  socket.addEventListener("error", (error) => {
+    onError?.(error);
+  });
+
+  return () => socket.close();
+}
+
+export { API_BASE_URL };

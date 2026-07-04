@@ -142,7 +142,30 @@ def build():
         ],
     )
 
-    doc.add_heading("3. UI 展示链路", level=1)
+    doc.add_heading("3. 苹果成熟度分级控制", level=1)
+    doc.add_paragraph(
+        "系统使用统一字段 target_maturity 控制目标苹果成熟度。yellow apple 表示半成熟果控制策略。"
+    )
+    add_table(
+        doc,
+        ["UI 选项", "后端字段", "Policy input"],
+        [
+            ["成熟果（红苹果）", 'target_maturity: "red"', 'target_maturity="red"'],
+            ["半成熟果（黄苹果）", 'target_maturity: "yellow"', 'target_maturity="yellow"'],
+        ],
+        [Inches(1.8), Inches(2.2), Inches(2.2)],
+    )
+    add_bullets(
+        doc,
+        [
+            "task_control 不再使用旧的“只红/多摘/半摘”逻辑。",
+            "local 和 remote 模式均将同一个 target_maturity 传入 policy_runtime_service。",
+            "policy_runtime_service 在推理循环中把 target_maturity 注入 policy input。",
+            "robot_client 接口保持不变。",
+        ],
+    )
+
+    doc.add_heading("4. UI 展示链路", level=1)
     add_code_block(
         doc,
         [
@@ -156,7 +179,7 @@ def build():
         "展示链只影响页面可读性，不改变控制逻辑。mock_task 只允许为 UI fallback 提供展示数据。"
     )
 
-    doc.add_heading("4. local / remote 部署定义", level=1)
+    doc.add_heading("5. local / remote 部署定义", level=1)
     add_table(
         doc,
         ["模式", "部署链路", "说明"],
@@ -175,13 +198,13 @@ def build():
         [Inches(1.0), Inches(3.7), Inches(1.8)],
     )
 
-    doc.add_heading("5. 操作流程", level=1)
+    doc.add_heading("6. 操作流程", level=1)
     add_bullets(
         doc,
         [
             "启动 FastAPI backend 和前端 UI。",
             "确认 LEROBOT_POLICY_MODEL_PATH、POLICY_INFERENCE_HZ 和机器人连接配置。",
-            "前端选择 target_mode，并通过 /set_target_apple 写入后端状态。",
+            "前端选择 target_maturity（red 或 yellow），并通过 /set_target_apple 写入后端状态。",
             "前端调用 /start_task，task_control 根据 mode 调用本机或远程 policy_runtime_service。",
             "policy_runtime_service 读取 robot_client observation，执行 ACT policy 推理，并通过 robot_client 下发 action。",
             "status_fusion 汇总 robot_status、backend_state 和 policy_status，通过 HTTP/WebSocket 更新前端。",
@@ -189,7 +212,7 @@ def build():
         ],
     )
 
-    doc.add_heading("6. 异常与 fallback 原则", level=1)
+    doc.add_heading("7. 异常与 fallback 原则", level=1)
     add_table(
         doc,
         ["场景", "系统行为", "禁止行为"],
@@ -202,7 +225,7 @@ def build():
         [Inches(1.7), Inches(2.35), Inches(2.45)],
     )
 
-    doc.add_heading("7. 答辩级验收清单", level=1)
+    doc.add_heading("8. 答辩级验收清单", level=1)
     add_bullets(
         doc,
         [

@@ -1,3 +1,5 @@
+import argparse
+import os
 import socket
 import subprocess
 import sys
@@ -13,7 +15,6 @@ LOG_DIR = ROOT_DIR / "logs"
 
 BACKEND_PORT = 8000
 FRONTEND_PORT = 5173
-FRONTEND_URL = f"http://localhost:{FRONTEND_PORT}"
 SKIP_DIR_NAMES = {"node_modules", "dist", "build", ".git", ".vite", ".vite-temp", "__pycache__"}
 SOURCE_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".html", ".css"}
 
@@ -88,13 +89,13 @@ def frontend_signal_score(candidate):
         signal_text.append(read_text_safely(source_file))
 
     combined = "\n".join(signal_text)
-    if "local" in combined and "remote" in combined:
+    if "ws/vision" in combined:
         score += 500
     if "/start_task" in combined:
         score += 120
     if "/stop" in combined:
         score += 120
-    if "target_mode" in combined:
+    if "target_maturity" in combined:
         score += 60
 
     return score
@@ -123,7 +124,7 @@ def open_log_file(name):
     return open(log_path, "a", encoding="utf-8", buffering=1)
 
 
-def start_process(name, command, cwd, log_name):
+def start_process(name, command, cwd, log_name, env=None):
     try:
         log_file = open_log_file(log_name)
         log_file.write(f"\n\n===== {name} started at {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
@@ -134,6 +135,7 @@ def start_process(name, command, cwd, log_name):
             stdout=log_file,
             stderr=subprocess.STDOUT,
             shell=False,
+            env=env,
         )
         log(f"[INFO] {name} process started. PID={process.pid}. Log: {LOG_DIR / log_name}")
         return process
@@ -158,14 +160,14 @@ def start_backend():
         "uvicorn",
         "app.main:app",
         "--host",
-        "127.0.0.1",
+        "0.0.0.0",
         "--port",
         str(BACKEND_PORT),
     ]
     return start_process("backend", command, BACKEND_DIR, "backend.log")
 
 
-def start_frontend():
+def start_frontend(robot_backend_url):
     log("[INFO] Starting frontend...")
     frontend_dir = find_frontend_dir()
     if frontend_dir is None:
@@ -176,8 +178,13 @@ def start_frontend():
         log(f"[WARN] Port {FRONTEND_PORT} is already in use. Frontend may already be running.")
         return None
 
-    command = ["npm.cmd", "run", "dev"]
-    return start_process("frontend", command, frontend_dir, "frontend.log")
+    env = os.environ.copy()
+    if robot_backend_url:
+        env["VITE_ROBOT_BACKEND_URL"] = robot_backend_url.rstrip("/")
+        log(f"[INFO] Frontend will connect to backend: {env['VITE_ROBOT_BACKEND_URL']}")
+
+    command = ["npm.cmd", "run", "dev", "--", "--host", "0.0.0.0"]
+    return start_process("frontend", command, frontend_dir, "frontend.log", env=env)
 
 
 def report_status(name, port, process):
@@ -190,26 +197,68 @@ def report_status(name, port, process):
     log(f"[INFO] {name} is starting. Please wait a moment and check logs if it does not become ready.")
 
 
-def main():
-    log("[INFO] One-click launcher started.")
+def parse_args():
+    parser = argparse.ArgumentParser(description="Apple picking robot launcher")
+    parser.add_argument(
+        "--role",
+        choices=["all", "backend", "frontend"],
+        default="all",
+        help="all: robot PC single-machine demo; backend: robot PC only; frontend: PC1 only",
+    )
+    parser.add_argument(
+        "--robot-backend-url",
+        default=os.getenv("VITE_ROBOT_BACKEND_URL") or os.getenv("ROBOT_BACKEND_URL"),
+        help="Robot PC backend URL for frontend mode, for example http://192.168.1.20:8000",
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not open the frontend page automatically.",
+    )
+    return parser.parse_args()
 
-    backend_process = start_backend()
-    frontend_process = start_frontend()
+
+def main():
+    args = parse_args()
+    log(f"[INFO] Launcher started. role={args.role}")
+
+    backend_process = None
+    frontend_process = None
+
+    if args.role in {"all", "backend"}:
+        backend_process = start_backend()
+
+    if args.role in {"all", "frontend"}:
+        robot_backend_url = args.robot_backend_url
+        if args.role == "all" and not robot_backend_url:
+            robot_backend_url = f"http://127.0.0.1:{BACKEND_PORT}"
+        if args.role == "frontend" and not robot_backend_url:
+            log("[ERROR] Frontend-only mode requires --robot-backend-url or VITE_ROBOT_BACKEND_URL.")
+            return
+        frontend_process = start_frontend(robot_backend_url)
 
     log("[INFO] Checking service status...")
     time.sleep(3)
-    report_status("backend", BACKEND_PORT, backend_process)
-    report_status("frontend", FRONTEND_PORT, frontend_process)
+    if args.role in {"all", "backend"}:
+        report_status("backend", BACKEND_PORT, backend_process)
+    if args.role in {"all", "frontend"}:
+        report_status("frontend", FRONTEND_PORT, frontend_process)
 
-    log(f"[INFO] Opening browser: {FRONTEND_URL}")
-    time.sleep(1)
-    try:
-        webbrowser.open(FRONTEND_URL)
-    except Exception as exc:
-        log(f"[WARN] Could not open browser automatically: {exc}")
+    if args.role in {"all", "frontend"} and not args.no_browser:
+        frontend_url = f"http://localhost:{FRONTEND_PORT}"
+        log(f"[INFO] Opening browser: {frontend_url}")
+        time.sleep(1)
+        try:
+            webbrowser.open(frontend_url)
+        except Exception as exc:
+            log(f"[WARN] Could not open browser automatically: {exc}")
 
-    log("[INFO] Startup complete. You can use the web page now.")
-    log("[INFO] Close backend/frontend processes manually when you are finished.")
+    log("[INFO] Startup complete.")
+    if args.role == "backend":
+        log(f"[INFO] Robot PC backend is http://<robot_pc_ip>:{BACKEND_PORT}")
+    if args.role in {"all", "frontend"}:
+        log(f"[INFO] Frontend is http://localhost:{FRONTEND_PORT}")
+    log("[INFO] Close started processes manually when you are finished.")
 
 
 if __name__ == "__main__":

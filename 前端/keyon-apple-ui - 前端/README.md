@@ -103,7 +103,7 @@ vite.config.js    # Vite 配置
 
 前端通过 `src/api.js` 调用后端：
 
-- `setTargetMode(targetMode)` -> `POST /set_target_apple`
+- `setTargetMaturity(targetMaturity)` -> `POST /set_target_apple`，请求体为 `{ "target_maturity": "red" | "yellow" }`
 - `startTask(mode)` -> `POST /start_task`
 - `stopTask(mode)` -> `POST /stop`
 - `resetTask()` -> `POST /reset`

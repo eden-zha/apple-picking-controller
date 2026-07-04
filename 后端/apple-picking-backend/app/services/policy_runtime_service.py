@@ -6,14 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-import requests
-
 from app.adapters import robot_client
-from app.models import PolicyStatus
+from app.models import PolicyStatus, TargetMaturity
+from app.services.vision_service import vision_service
 
 
 DEFAULT_TARGET_HZ = 20.0
-REMOTE_TIMEOUT_SECONDS = 5
 
 
 @dataclass
@@ -33,6 +31,7 @@ class PolicyRuntimeService:
         self._loop_hz = 0.0
         self._inference_hz = _float_env("POLICY_INFERENCE_HZ", DEFAULT_TARGET_HZ)
         self._last_action = None
+        self._target_maturity = None  # type: Optional[TargetMaturity]
         self._lock = asyncio.Lock()
 
     def status(self) -> PolicyStatus:
@@ -46,17 +45,18 @@ class PolicyRuntimeService:
             last_error=self._last_error,
         )
 
-    async def start(self, local: bool) -> PolicyCommandResult:
-        if not local:
-            return await _remote_policy_command("start")
+    async def start(self, target_maturity: Optional[TargetMaturity]) -> PolicyCommandResult:
+        if target_maturity is None:
+            return PolicyCommandResult(False, "target_maturity is required before starting policy runtime")
 
         async with self._lock:
             if self._running:
                 return PolicyCommandResult(True, "policy runtime already running")
 
+            self._target_maturity = target_maturity
             try:
                 await asyncio.to_thread(self._load_policy)
-                robot_start = await robot_client.start(local=True)
+                robot_start = await robot_client.start()
                 if not robot_start.success:
                     self._last_error = robot_start.message
                     return PolicyCommandResult(False, robot_start.message)
@@ -67,45 +67,40 @@ class PolicyRuntimeService:
             self._running = True
             self._paused = False
             self._last_error = None
-            self._loop_task = asyncio.create_task(self._inference_loop())
-            return PolicyCommandResult(True, "policy runtime started")
+            self._loop_task = asyncio.create_task(self._inference_loop(target_maturity))
+            return PolicyCommandResult(True, f"policy runtime started with target_maturity={target_maturity.value}")
 
-    async def stop(self, local: bool) -> PolicyCommandResult:
-        if not local:
-            return await _remote_policy_command("stop")
-
+    async def stop(self) -> PolicyCommandResult:
         async with self._lock:
             self._running = False
             self._paused = False
+            self._target_maturity = None
             if self._loop_task is not None:
                 self._loop_task.cancel()
                 self._loop_task = None
 
-        robot_stop = await robot_client.stop(local=True)
+        robot_stop = await robot_client.stop()
         if robot_stop.success:
             return PolicyCommandResult(True, "policy runtime stopped")
         return PolicyCommandResult(False, robot_stop.message)
 
-    async def refresh_remote_status(self) -> PolicyStatus:
-        remote_status = await _remote_policy_status()
-        return remote_status or self.status()
-
-    async def run_policy(self, observation: Any) -> Any:
+    async def run_policy(self, observation: Any, target_maturity: TargetMaturity, target_apple: Optional[dict]) -> Any:
         if self._policy is None:
             await asyncio.to_thread(self._load_policy)
+        policy_input = _build_policy_input(observation, target_maturity, target_apple)
         started_at = time.perf_counter()
-        action = await asyncio.to_thread(self._infer_action, observation)
+        action = await asyncio.to_thread(self._infer_action, policy_input)
         elapsed = time.perf_counter() - started_at
         if elapsed > 0:
             self._loop_hz = round(1.0 / elapsed, 2)
         self._last_action = action
         return action
 
-    async def _inference_loop(self) -> None:
+    async def _inference_loop(self, target_maturity: TargetMaturity) -> None:
         target_period = 1.0 / max(self._inference_hz, 1.0)
         while self._running:
             loop_started = time.perf_counter()
-            state = await robot_client.get_state(local=True)
+            state = await robot_client.get_state()
             if state is None:
                 self._paused = True
                 self._last_error = "robot disconnected; policy loop paused"
@@ -119,9 +114,16 @@ class PolicyRuntimeService:
                 await asyncio.sleep(target_period)
                 continue
 
+            target_apple = _select_target_apple(target_maturity)
+            if target_apple is None:
+                self._paused = True
+                self._last_error = f"no {target_maturity.value} apple detected; arm command paused"
+                await asyncio.sleep(target_period)
+                continue
+
             self._paused = False
-            action = await self.run_policy(observation)
-            action_result = await robot_client.send_action(action, local=True)
+            action = await self.run_policy(observation, target_maturity, target_apple)
+            action_result = await robot_client.send_action(action)
             if not action_result.success:
                 self._paused = True
                 self._last_error = action_result.message
@@ -221,59 +223,26 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-def _remote_base_url() -> Optional[str]:
-    base_url = os.getenv("POLICY_RUNTIME_REMOTE_URL") or os.getenv("ROBOT_PC_BASE_URL")
-    if base_url:
-        return base_url.rstrip("/")
+def _build_policy_input(observation: Any, target_maturity: TargetMaturity, target_apple: Optional[dict]) -> Any:
+    if isinstance(observation, dict):
+        return {
+            **observation,
+            "target_maturity": target_maturity.value,
+            "target_apple": target_apple,
+        }
+    return {
+        "observation": observation,
+        "target_maturity": target_maturity.value,
+        "target_apple": target_apple,
+    }
 
-    robot_pc_ip = os.getenv("ROBOT_PC_IP")
-    if robot_pc_ip:
-        return f"http://{robot_pc_ip}:8000"
+
+def _select_target_apple(target_maturity: TargetMaturity) -> Optional[dict]:
+    snapshot = vision_service.snapshot()
+    for apple in snapshot.apple_list:
+        if apple.get("color") == target_maturity.value:
+            return apple
     return None
 
 
-async def _remote_policy_command(command: str) -> PolicyCommandResult:
-    base_url = _remote_base_url()
-    if not base_url:
-        return PolicyCommandResult(False, "remote policy runtime endpoint is not configured")
-
-    url = f"{base_url}/policy/{command}"
-    try:
-        response = await asyncio.to_thread(
-            requests.post,
-            url,
-            json={},
-            timeout=REMOTE_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        payload = response.json() if response.content else {}
-    except Exception as exc:
-        return PolicyCommandResult(False, f"remote policy runtime {command} failed: {exc}")
-
-    return PolicyCommandResult(
-        success=bool(payload.get("success", True)),
-        message=payload.get("message") or f"remote policy runtime {command} accepted",
-    )
-
-
-async def _remote_policy_status() -> Optional[PolicyStatus]:
-    base_url = _remote_base_url()
-    if not base_url:
-        return None
-
-    try:
-        response = await asyncio.to_thread(
-            requests.get,
-            f"{base_url}/policy/status",
-            timeout=REMOTE_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except Exception:
-        return None
-
-    return PolicyStatus(**payload)
-
-
 policy_runtime_service = PolicyRuntimeService()
-

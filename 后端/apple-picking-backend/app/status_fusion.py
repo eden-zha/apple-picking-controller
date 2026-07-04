@@ -3,6 +3,7 @@ from typing import Optional
 from app.adapters.robot_client import RawRobotState
 from app.mock_task import get_mock_fallback_snapshot
 from app.models import ExecutionMode, RobotStatus, TaskState, UIStateResponse
+from app.services.vision_service import vision_service
 from app.state_manager import task_state
 
 
@@ -65,8 +66,9 @@ def build_ui_state(
         task_state=task_state_value,
         progress=progress,
         mode=current_mode,
-        target_mode=backend_status.target_mode,
+        target_maturity=backend_status.target_maturity,
         logs=backend_status.logs,
         robot_status=robot_status,
         policy_status=backend_status.policy_status,
+        vision_status=vision_service.snapshot(),
     )

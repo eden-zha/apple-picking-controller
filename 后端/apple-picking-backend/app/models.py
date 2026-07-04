@@ -12,18 +12,13 @@ class TaskState(str, Enum):
     ERROR = "ERROR"
 
 
-class TargetMode(str, Enum):
-    red_only = "red_only"
-    red_green = "red_green"
-
-
-class LegacyTargetColor(str, Enum):
+class TargetMaturity(str, Enum):
     red = "red"
+    yellow = "yellow"
 
 
 class ExecutionMode(str, Enum):
-    local = "local"
-    remote = "remote"
+    robot_pc = "robot_pc"
 
 
 class RobotStatus(BaseModel):
@@ -45,11 +40,20 @@ class PolicyStatus(BaseModel):
     source: str = "policy_runtime_service"
 
 
+class VisionStatus(BaseModel):
+    total: int = 0
+    red: int = 0
+    yellow: int = 0
+    fps: float = 0
+    status: str = "stopped"
+    apple_list: List[dict] = Field(default_factory=list)
+
+
 class StatusResponse(BaseModel):
     state: TaskState
     progress: int = Field(ge=0, le=100)
     message: str
-    target_mode: Optional[TargetMode] = None
+    target_maturity: Optional[TargetMaturity] = None
     current_step: str
     logs: List[str]
     robot_status: RobotStatus = Field(default_factory=RobotStatus)
@@ -60,10 +64,11 @@ class UIStateResponse(BaseModel):
     task_state: TaskState
     progress: int = Field(ge=0, le=100)
     mode: ExecutionMode
-    target_mode: Optional[TargetMode] = None
+    target_maturity: Optional[TargetMaturity] = None
     logs: List[str]
     robot_status: RobotStatus
     policy_status: PolicyStatus
+    vision_status: VisionStatus = Field(default_factory=VisionStatus)
 
 
 class LogsResponse(BaseModel):
@@ -77,16 +82,8 @@ class CommandResponse(BaseModel):
 
 
 class TaskCommandRequest(BaseModel):
-    mode: ExecutionMode = ExecutionMode.remote
+    mode: ExecutionMode = ExecutionMode.robot_pc
 
 
 class TargetAppleRequest(BaseModel):
-    target_mode: Optional[TargetMode] = None
-    target_color: Optional[LegacyTargetColor] = None
-
-    def resolve_target_mode(self) -> Optional[TargetMode]:
-        if self.target_mode is not None:
-            return self.target_mode
-        if self.target_color == LegacyTargetColor.red:
-            return TargetMode.red_only
-        return None
+    target_maturity: TargetMaturity

@@ -3,3 +3,5 @@ uvicorn[standard]>=0.30.0
 requests>=2.32.0
 torch>=2.2.0
 lerobot
+opencv-python>=4.9.0
+ultralytics>=8.2.0

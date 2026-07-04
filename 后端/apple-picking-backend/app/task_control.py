@@ -1,8 +1,9 @@
 from typing import Optional, Tuple
 
 from app.adapters.robot_client import RawRobotState
-from app.models import ExecutionMode, PolicyStatus
+from app.models import ExecutionMode
 from app.services.policy_runtime_service import policy_runtime_service
+from app.services.vision_service import vision_service
 from app.status_fusion import build_ui_state
 from app.state_manager import task_state
 from app.websocket_manager import websocket_manager
@@ -14,10 +15,6 @@ def _ui_state_payload(ui_state) -> dict:
     return ui_state.dict()
 
 
-def _is_local(mode: ExecutionMode) -> bool:
-    return mode == ExecutionMode.local
-
-
 async def push_ui_state(
     mode: Optional[ExecutionMode] = None,
     raw_robot_state: Optional[RawRobotState] = None,
@@ -27,55 +24,36 @@ async def push_ui_state(
 
 
 async def execute_task(mode: ExecutionMode) -> Tuple[bool, str]:
-    await task_state.set_mode(mode)
+    await task_state.set_mode(ExecutionMode.robot_pc)
     can_start, message = await task_state.can_start()
     if not can_start:
         await task_state.add_log(message)
-        await push_ui_state(mode)
+        await push_ui_state(ExecutionMode.robot_pc)
         return False, message
 
-    result = await policy_runtime_service.start(local=_is_local(mode))
-    if _is_local(mode):
-        await task_state.set_policy_status(policy_runtime_service.status())
-    else:
-        await task_state.set_policy_status(
-            PolicyStatus(
-                running=result.success,
-                loaded=result.success,
-                paused=False,
-                source="remote_policy_runtime_service",
-                last_error=None if result.success else result.message,
-            )
-        )
+    await vision_service.start()
+    target_maturity = task_state.get_target_maturity()
+    result = await policy_runtime_service.start(target_maturity=target_maturity)
+    await task_state.set_policy_status(policy_runtime_service.status())
 
     if not result.success:
         await task_state.mark_error(result.message)
-        await push_ui_state(mode)
+        await push_ui_state(ExecutionMode.robot_pc)
         return False, result.message
 
-    await task_state.start_running("policy_runtime_service inference loop running")
+    await task_state.start_running("YOLO vision and robot PC arm control running")
     await task_state.add_log(result.message)
-    await push_ui_state(mode)
+    await push_ui_state(ExecutionMode.robot_pc)
     return True, result.message
 
 
-async def stop_robot_task(mode: ExecutionMode = ExecutionMode.remote) -> Tuple[bool, str]:
-    await task_state.set_mode(mode)
-    result = await policy_runtime_service.stop(local=_is_local(mode))
-    if _is_local(mode):
-        await task_state.set_policy_status(policy_runtime_service.status())
-    else:
-        await task_state.set_policy_status(
-            PolicyStatus(
-                running=False,
-                loaded=False,
-                paused=False,
-                source="remote_policy_runtime_service",
-                last_error=None if result.success else result.message,
-            )
-        )
+async def stop_robot_task(mode: ExecutionMode = ExecutionMode.robot_pc) -> Tuple[bool, str]:
+    await task_state.set_mode(ExecutionMode.robot_pc)
+    result = await policy_runtime_service.stop()
+    await vision_service.stop()
+    await task_state.set_policy_status(policy_runtime_service.status())
     stopped, local_message = await task_state.stop()
-    await push_ui_state(mode)
+    await push_ui_state(ExecutionMode.robot_pc)
 
     if result.success:
         return True, result.message

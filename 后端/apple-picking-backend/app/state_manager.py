@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 
 from app.adapters.robot_client import RawRobotState
-from app.models import ExecutionMode, PolicyStatus, RobotStatus, StatusResponse, TargetMode, TaskState
+from app.models import ExecutionMode, PolicyStatus, RobotStatus, StatusResponse, TargetMaturity, TaskState
 
 
 class StateManager:
@@ -12,8 +12,8 @@ class StateManager:
         self._state = TaskState.IDLE
         self._progress = 0
         self._message = "Waiting for task start."
-        self._mode = ExecutionMode.remote
-        self._target_mode = None  # type: Optional[TargetMode]
+        self._mode = ExecutionMode.robot_pc
+        self._target_maturity = None  # type: Optional[TargetMaturity]
         self._current_step = "Waiting"
         self._robot_status = RobotStatus(source="unavailable")
         self._policy_status = PolicyStatus()
@@ -38,7 +38,7 @@ class StateManager:
             state=self._state,
             progress=self._progress,
             message=self._message,
-            target_mode=self._target_mode,
+            target_maturity=self._target_maturity,
             current_step=self._current_step,
             logs=list(self._logs),
             robot_status=self._robot_status,
@@ -68,8 +68,8 @@ class StateManager:
 
     async def can_start(self) -> Tuple[bool, str]:
         async with self._lock:
-            if self._target_mode is None:
-                return False, "Select target_mode before starting a task."
+            if self._target_maturity is None:
+                return False, "Select target_maturity before starting a task."
             if self._state == TaskState.IDLE:
                 return True, "Task can start."
             if self._state == TaskState.RUNNING:
@@ -78,14 +78,14 @@ class StateManager:
                 return False, "Reset is required before starting another task."
             return False, "Current state does not allow task start."
 
-    async def start_running(self, current_step: str = "robot_client execution running") -> None:
+    async def start_running(self, current_step: str = "robot PC vision and arm control running") -> None:
         async with self._lock:
             self._state = TaskState.RUNNING
             self._progress = 0
             self._current_step = current_step
-            target = self._target_mode.value if self._target_mode else "unset"
-            self._message = f"Task running with target_mode={target}."
-            self.add_log_sync(f"Task entered RUNNING through robot_client, target_mode={target}.")
+            target = self._target_maturity.value if self._target_maturity else "unset"
+            self._message = f"Task running with target_maturity={target}."
+            self.add_log_sync(f"Task entered RUNNING on robot PC, target_maturity={target}.")
 
     async def set_mode(self, mode: ExecutionMode) -> None:
         async with self._lock:
@@ -175,17 +175,20 @@ class StateManager:
                 self._active_task = None
             self._state = TaskState.IDLE
             self._progress = 0
-            self._mode = ExecutionMode.remote
+            self._mode = ExecutionMode.robot_pc
             self._message = "Waiting for task start."
             self._current_step = "Waiting"
             self._robot_status = RobotStatus(source="unavailable")
             self._policy_status = PolicyStatus()
             self.add_log_sync("System reset to IDLE.")
 
-    async def set_target_mode(self, target_mode: TargetMode) -> None:
+    def get_target_maturity(self) -> Optional[TargetMaturity]:
+        return self._target_maturity
+
+    async def set_target_maturity(self, target_maturity: TargetMaturity) -> None:
         async with self._lock:
-            self._target_mode = target_mode
-            self.add_log_sync(f"target_mode set to {target_mode.value}.")
+            self._target_maturity = target_maturity
+            self.add_log_sync(f"target_maturity set to {target_maturity.value}.")
 
 
 task_state = StateManager()

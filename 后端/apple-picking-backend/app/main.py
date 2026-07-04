@@ -1,13 +1,14 @@
 import asyncio
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.adapters import robot_client
-from app.models import CommandResponse, LogsResponse, PolicyStatus, TargetAppleRequest, TaskCommandRequest, UIStateResponse
+from app.models import CommandResponse, LogsResponse, PolicyStatus, TargetAppleRequest, TaskCommandRequest, UIStateResponse, VisionStatus
 from app.status_fusion import build_ui_state
 from app.services.policy_runtime_service import policy_runtime_service
+from app.services.vision_service import vision_service
 from app.state_manager import task_state
 from app.task_control import execute_task, push_ui_state, stop_robot_task
 from app.websocket_manager import websocket_manager
@@ -38,14 +39,11 @@ def ui_state_payload(ui_state: UIStateResponse) -> dict:
 
 
 async def refresh_policy_status() -> None:
-    if task_state.get_mode().value == "remote":
-        await task_state.set_policy_status(await policy_runtime_service.refresh_remote_status())
-    else:
-        await task_state.set_policy_status(policy_runtime_service.status())
+    await task_state.set_policy_status(policy_runtime_service.status())
 
 
 async def refresh_robot_status() -> None:
-    raw_state = await robot_client.get_state(local=task_state.get_mode().value == "local")
+    raw_state = await robot_client.get_state()
     if raw_state is None:
         await task_state.mark_robot_status_unavailable()
         return
@@ -75,41 +73,49 @@ async def status_websocket(websocket: WebSocket) -> None:
         websocket_manager.disconnect(websocket)
 
 
+@app.websocket("/ws/vision")
+async def vision_websocket(websocket: WebSocket) -> None:
+    await vision_service.websocket_manager.connect(websocket)
+    try:
+        await websocket.send_json(ui_state_payload(vision_service.snapshot()))
+        while True:
+            await asyncio.sleep(30)
+    except WebSocketDisconnect:
+        vision_service.websocket_manager.disconnect(websocket)
+    except Exception:
+        vision_service.websocket_manager.disconnect(websocket)
+
+
 @app.post("/set_target_apple", response_model=CommandResponse)
 async def set_target_apple(request: TargetAppleRequest) -> CommandResponse:
-    target_mode = request.resolve_target_mode()
-    if target_mode is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Use target_mode=red_only or target_mode=red_green. Legacy target_color=red is also accepted.",
-        )
-
-    await task_state.set_target_mode(target_mode)
+    await task_state.set_target_maturity(request.target_maturity)
     await push_ui_state(task_state.get_mode())
     return CommandResponse(
         success=True,
-        message=f"target_mode set to {target_mode.value}.",
+        message=f"target_maturity set to {request.target_maturity.value}.",
         status=build_ui_state(),
     )
 
 
 @app.post("/start_task", response_model=CommandResponse)
 async def start_task(request: Optional[TaskCommandRequest] = None) -> CommandResponse:
-    mode = request.mode if request is not None else TaskCommandRequest().mode
-    started, message = await execute_task(mode)
+    started, message = await execute_task(TaskCommandRequest().mode)
     return CommandResponse(success=started, message=message, status=build_ui_state())
 
 
 @app.post("/stop", response_model=CommandResponse)
 async def stop_task(request: Optional[TaskCommandRequest] = None) -> CommandResponse:
-    mode = request.mode if request is not None else TaskCommandRequest().mode
-    stopped, message = await stop_robot_task(mode)
+    stopped, message = await stop_robot_task(TaskCommandRequest().mode)
     return CommandResponse(success=stopped, message=message, status=build_ui_state())
 
 
 @app.post("/policy/start")
-async def start_local_policy_runtime() -> dict:
-    result = await policy_runtime_service.start(local=True)
+async def start_local_policy_runtime(request: Optional[TargetAppleRequest] = None) -> dict:
+    target_maturity = request.target_maturity if request is not None else task_state.get_target_maturity()
+    if request is not None:
+        await task_state.set_target_maturity(request.target_maturity)
+    await vision_service.start()
+    result = await policy_runtime_service.start(target_maturity=target_maturity)
     await task_state.set_policy_status(policy_runtime_service.status())
     return {
         "success": result.success,
@@ -120,7 +126,8 @@ async def start_local_policy_runtime() -> dict:
 
 @app.post("/policy/stop")
 async def stop_local_policy_runtime() -> dict:
-    result = await policy_runtime_service.stop(local=True)
+    result = await policy_runtime_service.stop()
+    await vision_service.stop()
     await task_state.set_policy_status(policy_runtime_service.status())
     return {
         "success": result.success,
@@ -135,8 +142,15 @@ async def get_policy_runtime_status() -> PolicyStatus:
     return policy_runtime_service.status()
 
 
+@app.get("/vision/status", response_model=VisionStatus)
+async def get_vision_status() -> VisionStatus:
+    return vision_service.snapshot()
+
+
 @app.post("/reset", response_model=CommandResponse)
 async def reset_system() -> CommandResponse:
+    await policy_runtime_service.stop()
+    await vision_service.stop()
     await task_state.reset()
     await push_ui_state(task_state.get_mode())
     return CommandResponse(success=True, message="System reset.", status=build_ui_state())

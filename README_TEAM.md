@@ -106,9 +106,20 @@ robot_status + backend_state + optional mock fallback
 
 mock fallback 仅用于状态展示兜底，不生成 action，不参与 `policy_runtime_service -> robot_client -> SO-ARM101` 执行闭环。
 
+## 苹果成熟度分级控制
+
+UI 到 policy 的统一映射如下：
+
+| UI 选项 | 后端字段 | Policy input |
+| --- | --- | --- |
+| 成熟果（红苹果） | `target_maturity: "red"` | `target_maturity="red"` |
+| 半成熟果（黄苹果） | `target_maturity: "yellow"` | `target_maturity="yellow"` |
+
+yellow apple 表示半成熟果控制策略。`task_control` 不再使用旧的“只红/多摘/半摘”逻辑；local 和 remote 均将同一个 `target_maturity` 传入 `policy_runtime_service`，再由推理循环注入 policy input，`robot_client` 接口保持不变。
+
 ## 当前可用能力
 
-- 设置目标采摘模式：`red_only` / `red_green`。
+- 设置目标成熟度：`red` / `yellow`。
 - 开始采摘任务。
 - 紧急停止任务。
 - 查询任务状态、机器人状态、policy 状态和运行日志。

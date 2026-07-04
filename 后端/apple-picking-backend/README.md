@@ -1,204 +1,110 @@
-# 苹果采摘后端：真实机器人 AI 控制系统
+# 苹果采摘后端与 Robot PC 控制入口
 
-本系统为真实机器人AI控制系统：
-控制链采用 policy_runtime_service + robot_client 的闭环执行架构。
-mock_task 仅用于UI兜底显示，不参与任何机器人控制。
+本项目的主后端只负责接收前端指令、维护任务状态，并通过 HTTP 控制 robot PC。摄像头、训练好的识别/策略模型、SO-ARM101 机械臂控制程序都运行在 robot PC 上。
 
-## 后端定位
+## 控制边界
 
-本目录是 FastAPI 后端。它接收前端任务请求，维护任务状态，并通过 `task_control` 进入真实 AI 控制闭环：
+主后端不直接读取 USB 摄像头画面。
+
+主后端不直接运行 YOLO 或其他视觉模型。
+
+主后端不直接控制机械臂串口、USB 或 SDK。
+
+主后端只通过 HTTP 调用 robot PC：
+
+```text
+POST http://<robot-pc>:8000/robot/start
+POST http://<robot-pc>:8000/robot/stop
+```
+
+## Robot PC 执行链路
+
+robot PC 上运行 `后端/robot_pc_placeholder.py`，它现在是机器人电脑控制入口。
+
+当 robot PC 收到：
+
+```text
+POST /robot/start
+```
+
+它会启动本机已经配置好的抓取主程序。这个抓取程序负责：
+
+- 调用 robot PC 上连接的 USB 摄像头
+- 加载并运行本机训练好的模型
+- 识别苹果
+- 驱动 SO-ARM101 机械臂执行抓取
+
+当 robot PC 收到：
+
+```text
+POST /robot/stop
+```
+
+它会停止正在运行的抓取程序，并由抓取程序释放摄像头、模型推理进程和机械臂资源。
+
+## Robot PC 环境变量
+
+推荐配置：
+
+```text
+ROBOT_GRASP_START_CMD=python D:\robot\apple_grasp\run_grasp.py
+ROBOT_GRASP_WORKDIR=D:\robot\apple_grasp
+ROBOT_GRASP_STOP_CMD=python D:\robot\apple_grasp\stop_grasp.py
+```
+
+`ROBOT_GRASP_START_CMD` 指向 robot PC 本地的真实抓取程序。该程序内部可以运行 YOLO、LeRobot policy、摄像头采集和机械臂控制逻辑。
+
+如果没有配置 `ROBOT_GRASP_START_CMD`，服务会保留原有占位 fallback：
+
+```text
+POLICY_SERVER_START_CMD=...
+ROBOT_CLIENT_START_CMD=...
+POLICY_RUNTIME_START_CMD=...
+```
+
+如果这些旧命令也没有配置，`/robot/start` 会进入 placeholder fallback，只用于联调 HTTP 链路，不代表真实机械臂已经运动。
+
+## 主后端 remote 模式
+
+主后端 remote 模式只负责调度 robot PC：
 
 ```text
 frontend
-  -> FastAPI backend
-  -> task_control
-  -> policy_runtime_service
-  -> LeRobot ACT policy inference
-  -> robot_client
-  -> SO-ARM101 robot execution
+  -> FastAPI 主后端
+  -> HTTP /robot/start
+  -> robot PC 抓取程序
+  -> USB 摄像头 + 训练模型 + SO-ARM101
 ```
 
-关键边界：
-
-- `policy_runtime_service` 是唯一 AI 推理入口。
-- `robot_client` 是唯一机械臂执行入口。
-- `mock_task` 不参与控制链，只能作为 UI fallback 展示数据。
-- 前端不能直接控制机器人，只能通过后端 API 发起任务意图。
-
-## 接口列表
-
-### `GET /status`
-
-返回融合后的系统状态，来源包括后端任务状态、机器人状态、policy 状态和可选 UI fallback。
-
-字段语义：
-
-- `state` / `task_state`：后端任务状态，例如 `IDLE`、`RUNNING`、`DONE`、`STOPPED`、`ERROR`。
-- `robot_status`：来自 `robot_client` 或 `status_fusion` 的机器人状态。
-- `policy_status`：来自 `policy_runtime_service` 的推理状态。
-- `logs`：最近运行日志。
-
-如果状态中出现 `mock_fallback`，只表示展示层兜底。
-
-### `POST /set_target_apple`
-
-设置本轮任务目标采摘模式。推荐使用 `target_mode`：
-
-```json
-{
-  "target_mode": "red_only"
-}
-```
-
-或：
-
-```json
-{
-  "target_mode": "red_green"
-}
-```
-
-`target_color` 仅为旧字段兼容，后续不推荐新前端继续使用。
-
-### `POST /start_task`
-
-启动采摘任务。请求体可传：
-
-```json
-{ "mode": "local" }
-```
-
-或：
-
-```json
-{ "mode": "remote" }
-```
-
-无论 local 还是 remote，最终都必须进入真实 policy + robot_client 执行闭环。
-
-### `POST /stop`
-
-停止正在运行的任务。停止请求由 `task_control` 传递到当前部署方式对应的 policy runtime / robot client，不能由前端直接控制硬件。
-
-### `POST /reset`
-
-复位后端任务状态。复位不代表机器人硬件已完成物理复位；真实硬件状态必须以 `robot_client` 返回为准。
-
-### `GET /logs`
-
-查询最近运行日志。
-
-## local / remote 定义
-
-### local 模式
+停止链路：
 
 ```text
-backend
-  -> policy_runtime_service（本机进程）
-  -> robot_client
-  -> SO-ARM101
+frontend
+  -> FastAPI 主后端
+  -> HTTP /robot/stop
+  -> robot PC 停止抓取程序并释放资源
 ```
 
-local 代表本机部署真实 AI 控制闭环。
+## 后续状态回传
 
-### remote 模式
+当前主链路只要求 start/stop。后续如果前端需要展示识别数量、抓取数量、相机帧率、机械臂状态或异常信息，可以在 robot PC 服务中增加：
 
 ```text
-backend
-  -> HTTP
-  -> Robot PC
-  -> policy_runtime_service（远程进程）
-  -> robot_client
-  -> SO-ARM101
+GET /robot/status
+WebSocket /robot/status/ws
 ```
 
-remote 代表 policy runtime 和 robot client 部署在 Robot PC。Robot PC 必须承载远程 `policy_runtime_service`。
+然后由主后端转发或融合这些状态给前端。
 
-## UI 展示链
+## 主后端接口
+
+前端接口保持不变：
 
 ```text
-robot_status + backend_state + optional mock fallback
-  -> status_fusion
-  -> websocket / HTTP
-  -> frontend UI
+POST /start_task
+POST /stop
+GET /status
 ```
 
-`status_fusion` 负责把控制链状态整理给 UI。UI 展示链不反向改变机器人控制逻辑。
+主后端内部根据 local/remote 配置决定是否调用 robot PC。前端不需要知道摄像头、模型或机械臂程序运行在哪里。
 
-## 文件结构
-
-```text
-app/
-├── main.py
-├── models.py
-├── state_manager.py
-├── task_control.py
-├── status_fusion.py
-├── mock_task.py
-├── services/
-│   └── policy_runtime_service.py
-└── adapters/
-    └── robot_client.py
-requirements.txt
-README.md
-REAL_ROBOT_ARCHITECTURE.md
-PROJECT_CONTEXT.md
-REQUIREMENTS_DRAFT.md
-```
-
-## 安装依赖
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-macOS / Linux：
-
-```bash
-source .venv/bin/activate
-```
-
-## 启动服务
-
-```bash
-uvicorn app.main:app --reload
-```
-
-默认服务地址：
-
-```text
-http://127.0.0.1:8000
-```
-
-接口文档：
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-## 配置项
-
-```text
-LEROBOT_POLICY_MODEL_PATH=D:\path\to\outputs\train\...\pretrained_model
-POLICY_INFERENCE_HZ=20
-POLICY_RUNTIME_REMOTE_URL=http://<robot-pc-host>:8000
-LOCAL_ROBOT_CLIENT_URL=http://127.0.0.1:<robot-service-port>
-SO_ARM101_ROBOT_FACTORY=your_module:create_robot
-```
-
-## 快速测试
-
-```bash
-curl http://127.0.0.1:8000/status
-curl -X POST http://127.0.0.1:8000/set_target_apple ^
-  -H "Content-Type: application/json" ^
-  -d "{\"target_mode\":\"red_only\"}"
-curl -X POST http://127.0.0.1:8000/start_task ^
-  -H "Content-Type: application/json" ^
-  -d "{\"mode\":\"local\"}"
-curl -X POST http://127.0.0.1:8000/stop ^
-  -H "Content-Type: application/json" ^
-  -d "{\"mode\":\"local\"}"
-```

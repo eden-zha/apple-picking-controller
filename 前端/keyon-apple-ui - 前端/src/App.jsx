@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Apple,
   Battery,
@@ -30,20 +30,21 @@ import {
   Activity,
 } from "lucide-react";
 import {
-  getLogs,
   getStatus,
+  API_BASE_URL,
   resetTask,
-  setTargetMode,
+  setTargetMaturity,
   startTask,
   stopTask,
   subscribeStatus,
+  subscribeVision,
 } from "./api";
 
 const logoSrc = `${import.meta.env.BASE_URL}keyon-logo.png`;
 
-const targetModeLabels = {
-  red_only: "只采红苹果",
-  red_green: "红苹果和绿苹果都采",
+const targetMaturityLabels = {
+  red: "成熟果",
+  yellow: "半成熟果",
 };
 
 const stateLabels = {
@@ -89,10 +90,10 @@ const BigButton = ({
 export default function App() {
   const [page, setPage] = useState("home");
   const [status, setStatus] = useState("待命");
-  const [picked, setPicked] = useState(0);
+  const [picked] = useState(0);
   const [skipped, setSkipped] = useState(0);
-  const [basket, setBasket] = useState(28);
-  const [mode, setMode] = useState("只摘精品果");
+  const [basket] = useState(28);
+  const [mode, setMode] = useState("成熟果");
   const [area, setArea] = useState("A 区");
   const [routeMode, setRouteMode] = useState("自动路线");
   const [modal, setModal] = useState(null);
@@ -101,8 +102,16 @@ export default function App() {
   const [apiMessage, setApiMessage] = useState("");
   const [taskStatus, setTaskStatus] = useState(null);
   const [logs, setLogs] = useState([]);
-  const [isPolling, setIsPolling] = useState(false);
-  const [executionMode, setExecutionMode] = useState("remote");
+  const [isLogPreviewOpen, setIsLogPreviewOpen] = useState(false);
+  const [isLogPreviewPinned, setIsLogPreviewPinned] = useState(false);
+  const [visionStatus, setVisionStatus] = useState({
+    total: 0,
+    red: 0,
+    yellow: 0,
+    fps: 0,
+    status: "stopped",
+    apple_list: [],
+  });
 
   const normalizeLogs = (value) => {
     if (Array.isArray(value)) return value;
@@ -120,18 +129,19 @@ export default function App() {
       setStatus(stateLabels[nextTaskState] || nextTaskState);
     }
 
-    if (nextStatus.target_mode) {
-      const nextMode =
-        nextStatus.target_mode === "red_only" ? "只摘精品果" : "尽量多摘";
-      setMode(nextMode);
+    if (nextStatus.target_maturity) {
+      setMode(
+        targetMaturityLabels[nextStatus.target_maturity] ||
+          nextStatus.target_maturity
+      );
     }
 
     if (nextStatus.logs) {
       setLogs(normalizeLogs(nextStatus.logs));
     }
 
-    if (nextTaskState === "DONE" || nextTaskState === "STOPPED") {
-      setIsPolling(false);
+    if (nextStatus.vision_status) {
+      setVisionStatus(nextStatus.vision_status);
     }
   };
 
@@ -142,17 +152,8 @@ export default function App() {
       setApiError("");
     } catch (error) {
       setApiError(error.message || "后端未连接，请先启动 FastAPI 服务");
-      setIsPolling(false);
     }
   };
-
-  useEffect(() => {
-    if (!isPolling || page !== "work") return undefined;
-
-    refreshStatus();
-    const timer = window.setInterval(refreshStatus, 1000);
-    return () => window.clearInterval(timer);
-  }, [isPolling, page]);
 
   useEffect(() => {
     if (page !== "work") return undefined;
@@ -163,8 +164,21 @@ export default function App() {
         setApiError("");
       },
       onError: () => {
-        setApiError("WebSocket 未连接，已使用 HTTP 状态刷新兜底。");
-        setIsPolling(true);
+        setApiError("状态 WebSocket 未连接，请检查 robot PC 后端。");
+      },
+    });
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "work") return undefined;
+
+    return subscribeVision({
+      onMessage: (data) => {
+        setVisionStatus(data);
+        setApiError("");
+      },
+      onError: () => {
+        setApiError("视觉 WebSocket 未连接，请检查 robot PC 后端。");
       },
     });
   }, [page]);
@@ -173,11 +187,10 @@ export default function App() {
     try {
       setApiError("");
       setApiMessage("");
-      const data = await startTask(executionMode);
+      const data = await startTask();
       applyStatus(data);
       setStatus("任务已启动，正在获取状态");
       setPage("work");
-      setIsPolling(true);
     } catch (error) {
       setApiError(error.message || "后端未连接，请先启动 FastAPI 服务");
     }
@@ -200,20 +213,20 @@ export default function App() {
     setMode(item);
     setApiError("");
 
-    const targetMode =
-      item === "只摘精品果" ? "red_only" : item === "尽量多摘" ? "red_green" : null;
+    const targetMaturity =
+      item === "成熟果" ? "red" : item === "半成熟果" ? "yellow" : null;
 
-    if (!targetMode) {
+    if (!targetMaturity) {
       setApiMessage(
-        "该模式暂未接入，当前仅支持‘只摘精品果’和‘尽量多摘’。"
+        "该成熟度暂未接入，当前仅支持成熟果和半成熟果。"
       );
       return;
     }
 
     try {
-      const data = await setTargetMode(targetMode);
+      const data = await setTargetMaturity(targetMaturity);
       applyStatus(data);
-      setApiMessage(`已设置目标：${targetModeLabels[targetMode]}`);
+      setApiMessage(`已设置目标：${targetMaturityLabels[targetMaturity]}`);
     } catch (error) {
       setApiError(error.message || "后端未连接，请先启动 FastAPI 服务");
     }
@@ -227,10 +240,9 @@ export default function App() {
   const handleStopTask = async () => {
     try {
       setApiError("");
-      const data = await stopTask(executionMode);
+      const data = await stopTask();
       applyStatus(data);
       setStatus("已停止");
-      setIsPolling(false);
       await refreshStatus();
       setModal("stop");
     } catch (error) {
@@ -247,19 +259,8 @@ export default function App() {
       setTaskStatus(null);
       setLogs([]);
       setStatus("待命");
-      setIsPolling(false);
       setPage("home");
       setApiMessage("系统已复位。");
-    } catch (error) {
-      setApiError(error.message || "后端未连接，请先启动 FastAPI 服务");
-    }
-  };
-
-  const handleGetLogs = async () => {
-    try {
-      const data = await getLogs();
-      setLogs(normalizeLogs(data?.logs ?? data));
-      setApiError("");
     } catch (error) {
       setApiError(error.message || "后端未连接，请先启动 FastAPI 服务");
     }
@@ -342,18 +343,61 @@ export default function App() {
       <LogoPlate />
 
       <div className="flex flex-wrap items-center justify-end gap-3">
-        <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-bold text-slate-200">
-          <Bot className="h-4 w-4 text-emerald-300" />
-          <span>运行模式</span>
-          <select
-            value={executionMode}
-            onChange={(event) => setExecutionMode(event.target.value)}
-            className="rounded-xl border border-white/10 bg-slate-950 px-3 py-1.5 text-sm font-bold text-white outline-none"
+        <div
+          className="relative hidden lg:block"
+          onMouseEnter={() => setIsLogPreviewOpen(true)}
+          onMouseLeave={() => {
+            if (!isLogPreviewPinned) setIsLogPreviewOpen(false);
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              const nextPinned = !isLogPreviewPinned;
+              setIsLogPreviewPinned(nextPinned);
+              setIsLogPreviewOpen(nextPinned || !isLogPreviewOpen);
+            }}
+            className={`flex max-w-sm items-center gap-3 rounded-2xl border px-4 py-3 text-left text-xs text-slate-300 transition ${
+              isLogPreviewPinned
+                ? "border-emerald-300/30 bg-emerald-400/10"
+                : "border-white/10 bg-white/5 hover:bg-white/10"
+            }`}
           >
-            <option value="local">local（本地模拟）</option>
-            <option value="remote">remote（远程机械臂控制）</option>
-          </select>
-        </label>
+            <ClipboardCheck className="h-4 w-4 shrink-0 text-emerald-300" />
+            <div className="min-w-0">
+              <p className="font-bold text-slate-100">运行日志</p>
+              <p className="truncate text-slate-400">
+                {isLogPreviewPinned ? "已固定，点击收起" : "悬停预览，点击固定"}
+              </p>
+            </div>
+          </button>
+
+          {isLogPreviewOpen && (
+            <div className="absolute right-0 top-[calc(100%+0.75rem)] z-40 w-96 rounded-2xl border border-white/10 bg-slate-950/95 p-4 text-sm shadow-2xl shadow-black/50 backdrop-blur">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="font-black text-white">最近运行日志</p>
+                <span className="rounded-full bg-white/10 px-2 py-1 text-xs font-bold text-slate-300">
+                  {isLogPreviewPinned ? "已固定" : "预览"}
+                </span>
+              </div>
+
+              <div className="max-h-56 overflow-y-auto rounded-xl bg-black/25 p-3">
+                {recentLogs.length > 0 ? (
+                  recentLogs.map((item, index) => (
+                    <p
+                      key={`${item}-${index}`}
+                      className="border-b border-white/10 py-2 text-xs leading-relaxed text-slate-300 last:border-b-0"
+                    >
+                      {item}
+                    </p>
+                  ))
+                ) : (
+                  <p className="text-xs text-slate-400">暂无日志。</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
         <div className="hidden items-center gap-2 rounded-2xl border border-emerald-300/20 bg-emerald-400/10 px-4 py-3 text-sm font-bold text-emerald-300 md:flex">
           <ShieldCheck className="h-4 w-4" />
           设备在线
@@ -417,9 +461,11 @@ export default function App() {
     ? stateLabels[backendState] || backendState
     : "未连接";
 
-  const backendTargetText = taskStatus?.target_mode
-    ? targetModeLabels[taskStatus.target_mode] || taskStatus.target_mode
+  const backendTargetText = taskStatus?.target_maturity
+    ? targetMaturityLabels[taskStatus.target_maturity] || taskStatus.target_maturity
     : "未设置";
+
+  const recentLogs = logs.slice(-10).reverse();
 
   const HomePage = () => (
     <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
@@ -429,7 +475,7 @@ export default function App() {
             <p className="mb-2 text-sm font-bold text-red-300">今日任务</p>
             <h2 className="text-5xl font-black text-white">A 区苹果采摘</h2>
             <p className="mt-4 max-w-xl text-lg text-slate-300">
-              当前推荐模式：只摘精品果。机器人将自动沿果树行进，识别成熟苹果并放入果筐。
+              当前推荐目标：成熟果。机器人将自动沿果树行进，按成熟度策略识别并采摘苹果。
             </p>
           </div>
 
@@ -515,12 +561,12 @@ export default function App() {
           <div>
             <p className="mb-3 font-bold text-slate-300">成熟度选择</p>
             <div className="grid gap-3">
-              {["只摘最红", "红一点也摘", "尽量多摘", "只摘精品果"].map(
+              {["成熟果", "半成熟果"].map(
                 (item) => (
                   <button
                     key={item}
                     onClick={() => handleModeSelect(item)}
-                    className={`rounded-2xl border p-5 text-left text-lg font-black transition ${
+                    className={`flex min-h-[104px] items-center rounded-2xl border p-5 text-left text-lg font-black transition ${
                       mode === item
                         ? "border-red-300 bg-red-500 text-white"
                         : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
@@ -627,17 +673,17 @@ export default function App() {
       </Card>
 
       <div className="grid gap-5">
-        <div className="grid grid-cols-2 gap-5">
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
           {[
             ["融合状态", backendStateText, Activity],
             ["任务进度", `${progressValue}%`, Gauge],
             ["目标模式", backendTargetText, Apple],
             ["机器人状态", taskStatus?.robot_status?.running ? "运行中" : "未运行", Timer],
           ].map(([name, value, Icon]) => (
-            <Card key={name} className="p-6">
-              <Icon className="mb-5 h-8 w-8 text-red-300" />
+            <Card key={name} className="p-4">
+              <Icon className="mb-3 h-6 w-6 text-red-300" />
               <p className="text-sm font-bold text-slate-400">{name}</p>
-              <p className="mt-2 break-words text-2xl font-black text-white">
+              <p className="mt-1 break-words text-xl font-black text-white">
                 {value}
               </p>
             </Card>
@@ -645,29 +691,34 @@ export default function App() {
         </div>
 
         <Card className="p-6">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <h3 className="text-2xl font-black text-white">运行日志</h3>
-            <button
-              onClick={handleGetLogs}
-              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-slate-200 hover:bg-white/10"
-            >
-              刷新日志
-            </button>
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-bold text-emerald-300">YOLO WebSocket</p>
+              <h3 className="text-2xl font-black text-white">实时画面果数</h3>
+            </div>
+            <div className={`rounded-full px-3 py-1 text-sm font-bold ${
+              visionStatus.status === "running"
+                ? "bg-emerald-400/10 text-emerald-300"
+                : visionStatus.status === "fallback"
+                  ? "bg-yellow-300/10 text-yellow-200"
+                  : "bg-white/10 text-slate-300"
+            }`}>
+              {visionStatus.status}
+            </div>
           </div>
 
-          <div className="max-h-72 overflow-auto rounded-2xl bg-black/20 p-4">
-            {logs.length > 0 ? (
-              logs.slice(-8).map((item, index) => (
-                <p
-                  key={`${item}-${index}`}
-                  className="border-b border-white/10 py-2 text-sm text-slate-300 last:border-b-0"
-                >
-                  {item}
-                </p>
-              ))
-            ) : (
-              <p className="text-sm text-slate-400">暂无日志。</p>
-            )}
+          <div className="grid gap-4 md:grid-cols-3">
+            {[
+              ["苹果总数", visionStatus.total, Apple, "text-white"],
+              ["红苹果", visionStatus.red, Apple, "text-red-300"],
+              ["黄苹果", visionStatus.yellow, Apple, "text-yellow-200"],
+            ].map(([name, value, Icon, color]) => (
+              <div key={name} className="rounded-2xl border border-white/10 bg-black/20 p-5">
+                <Icon className={`mb-4 h-7 w-7 ${color}`} />
+                <p className="text-sm font-bold text-slate-400">{name}</p>
+                <p className="mt-1 text-5xl font-black text-white">{value}</p>
+              </div>
+            ))}
           </div>
         </Card>
       </div>
@@ -678,9 +729,6 @@ export default function App() {
     <div className="grid gap-5">
       <Card className="p-7">
         <h2 className="mb-2 text-3xl font-black text-white">异常处理</h2>
-        <p className="mb-6 text-slate-400">
-          不用技术词，直接告诉工人发生了什么、怎么处理。
-        </p>
 
         <div className="grid gap-4 md:grid-cols-2">
           {alerts.map((item) => {
@@ -864,12 +912,12 @@ export default function App() {
         <Card className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div className="flex items-center gap-3 text-slate-300">
             <Bot className="h-5 w-5 text-emerald-300" />
-            当前配置：{area} · {mode} · {routeMode} · {executionMode}
+            当前配置：{area} · {mode} · {routeMode} · robot PC 后端
           </div>
 
           <div className="flex items-center gap-3 text-slate-300">
             <Zap className="h-5 w-5 text-yellow-300" />
-            后端：127.0.0.1:8000
+            后端：{API_BASE_URL.replace(/^https?:\/\//, "")}
           </div>
 
           <button
