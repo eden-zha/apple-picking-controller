@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.pyc
+*.pt
 venv/
 
 # Logs
@@ -13,5 +14,5 @@ build/
 
 # IDE
 .vscode/
-.idea/ºó¶Ë/apple-picking-backend/outputs/
+.idea/ï¿½ï¿½ï¿½/apple-picking-backend/outputs/
 **/outputs/

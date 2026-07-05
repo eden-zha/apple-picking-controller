@@ -43,6 +43,12 @@ import {
 
 const logoSrc = `${import.meta.env.BASE_URL}keyon-logo.png`;
 
+const formatDeviceTime = () =>
+  new Date().toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
 const targetMaturityLabels = {
   red: "成熟果",
   yellow: "半成熟果",
@@ -114,6 +120,7 @@ export default function App() {
     status: "stopped",
     apple_list: [],
   });
+  const [deviceTime, setDeviceTime] = useState(formatDeviceTime);
 
   const normalizeLogs = (value) => {
     if (Array.isArray(value)) return value;
@@ -193,6 +200,13 @@ export default function App() {
       },
     });
   }, [page]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setDeviceTime(formatDeviceTime());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const startWork = async () => {
     try {
@@ -375,7 +389,7 @@ export default function App() {
 
       <div className="flex flex-wrap items-center justify-end gap-3">
         <div
-          className="relative hidden lg:block"
+          className="relative min-w-0 flex-1 sm:flex-none"
           onMouseEnter={() => setIsLogPreviewOpen(true)}
           onMouseLeave={() => {
             if (!isLogPreviewPinned) setIsLogPreviewOpen(false);
@@ -388,7 +402,7 @@ export default function App() {
               setIsLogPreviewPinned(nextPinned);
               setIsLogPreviewOpen(nextPinned || !isLogPreviewOpen);
             }}
-            className={`flex max-w-sm items-center gap-3 rounded-2xl border px-4 py-3 text-left text-xs text-slate-300 transition ${
+            className={`flex w-full min-w-0 items-center gap-3 rounded-2xl border px-4 py-3 text-left text-xs text-slate-300 transition sm:w-auto sm:max-w-sm ${
               isLogPreviewPinned
                 ? "border-emerald-300/30 bg-emerald-400/10"
                 : "border-white/10 bg-white/5 hover:bg-white/10"
@@ -404,7 +418,7 @@ export default function App() {
           </button>
 
           {isLogPreviewOpen && (
-            <div className="absolute right-0 top-[calc(100%+0.75rem)] z-40 w-96 rounded-2xl border border-white/10 bg-slate-950/95 p-4 text-sm shadow-2xl shadow-black/50 backdrop-blur">
+            <div className="absolute left-0 right-auto top-[calc(100%+0.75rem)] z-40 w-[min(24rem,calc(100vw-2.5rem))] rounded-2xl border border-white/10 bg-slate-950/95 p-4 text-sm shadow-2xl shadow-black/50 backdrop-blur sm:left-auto sm:right-0">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <p className="font-black text-white">最近运行日志</p>
                 <span className="rounded-full bg-white/10 px-2 py-1 text-xs font-bold text-slate-300">
@@ -434,7 +448,7 @@ export default function App() {
           设备在线
         </div>
         <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
-          14:30
+          {deviceTime}
         </div>
       </div>
     </div>
@@ -495,6 +509,13 @@ export default function App() {
   const backendTargetText = taskStatus?.target_maturity
     ? targetMaturityLabels[taskStatus.target_maturity] || taskStatus.target_maturity
     : "未设置";
+
+  const isLeRobotRunning = Boolean(taskStatus?.policy_status?.running);
+  const robotStatusText = isLeRobotRunning
+    ? "作业中"
+    : taskStatus?.robot_status?.running
+      ? "运行中"
+      : "未运行";
 
   const recentLogs = logs.slice(-10).reverse();
 
@@ -709,7 +730,7 @@ export default function App() {
             ["融合状态", backendStateText, Activity],
             ["任务进度", `${progressValue}%`, Gauge],
             ["目标模式", backendTargetText, Apple],
-            ["机器人状态", taskStatus?.robot_status?.running ? "运行中" : "未运行", Timer],
+            ["机器人状态", robotStatusText, Timer],
           ].map(([name, value, Icon]) => (
             <Card key={name} className="p-4">
               <Icon className="mb-3 h-6 w-6 text-red-300" />
