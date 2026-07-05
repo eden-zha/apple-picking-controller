@@ -139,8 +139,10 @@ class LeRobotRecordService:
                 self._reset_calibration_prompt_state()
                 return LeRobotRecordResult(True, "lerobot.record is not running")
 
+            pid = self._process.pid
             if self._process.poll() is not None:
                 code = self._process.returncode
+                _kill_process_tree(pid)
                 message = f"lerobot.record exited with code {code}"
                 self._set_error(message)
                 self._process = None
@@ -149,17 +151,26 @@ class LeRobotRecordService:
                 self._close_log_file()
                 return LeRobotRecordResult(True, message)
 
-            pid = self._process.pid
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=STOP_TIMEOUT_SECONDS)
-            except subprocess.TimeoutExpired:
+            if os.name == "nt":
                 _kill_process_tree(pid)
                 try:
-                    self._process.kill()
-                    self._process.wait(timeout=3)
-                except Exception:
-                    pass
+                    self._process.wait(timeout=STOP_TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    try:
+                        self._process.kill()
+                        self._process.wait(timeout=3)
+                    except Exception:
+                        pass
+            else:
+                self._process.terminate()
+                try:
+                    self._process.wait(timeout=STOP_TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    try:
+                        self._process.kill()
+                        self._process.wait(timeout=3)
+                    except Exception:
+                        pass
 
             self._process = None
             self._reset_calibration_prompt_state()

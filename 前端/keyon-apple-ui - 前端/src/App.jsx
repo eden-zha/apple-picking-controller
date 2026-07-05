@@ -535,7 +535,7 @@ export default function App() {
           >
             <span className="flex items-center gap-4">
               <Square className="h-9 w-9" />
-              紧急停止
+              停止
             </span>
             <AlertTriangle className="h-7 w-7" />
           </BigButton>
@@ -699,7 +699,7 @@ export default function App() {
           onClick={handleStopTask}
           className="mt-4 w-full rounded-3xl border border-red-300/30 bg-red-500/15 p-5 text-lg font-black text-red-100 transition hover:bg-red-500/20"
         >
-          紧急停止
+          停止
         </button>
       </Card>
 
@@ -845,7 +845,7 @@ export default function App() {
         <>
           <AlertTriangle className="mx-auto mb-5 h-14 w-14 text-red-400" />
           <h3 className="text-center text-3xl font-black text-white">
-            已触发紧急停止
+            已停止
           </h3>
           <p className="mt-4 text-center text-slate-300">
             机械臂将停止动作，小车保持原地等待人工确认。
