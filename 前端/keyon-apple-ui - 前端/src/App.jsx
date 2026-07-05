@@ -30,6 +30,7 @@ import {
   Activity,
 } from "lucide-react";
 import {
+  continuePolicyCalibration,
   getStatus,
   API_BASE_URL,
   resetTask,
@@ -98,6 +99,7 @@ export default function App() {
   const [routeMode, setRouteMode] = useState("自动路线");
   const [modal, setModal] = useState(null);
   const [currentAlert, setCurrentAlert] = useState(null);
+  const [calibrationInteraction, setCalibrationInteraction] = useState(null);
   const [apiError, setApiError] = useState("");
   const [apiMessage, setApiMessage] = useState("");
   const [taskStatus, setTaskStatus] = useState(null);
@@ -142,6 +144,15 @@ export default function App() {
 
     if (nextStatus.vision_status) {
       setVisionStatus(nextStatus.vision_status);
+    }
+
+    const pendingInteraction = nextStatus.policy_status?.pending_interaction;
+    if (pendingInteraction?.type === "calibration_confirmation") {
+      setCalibrationInteraction(pendingInteraction);
+      setModal((current) => current || "calibration");
+    } else {
+      setCalibrationInteraction(null);
+      setModal((current) => (current === "calibration" ? null : current));
     }
   };
 
@@ -250,6 +261,26 @@ export default function App() {
     }
   };
 
+  const handleContinueCalibration = async () => {
+    try {
+      setApiError("");
+      const data = await continuePolicyCalibration();
+      if (data?.policy_status) {
+        applyStatus({ policy_status: data.policy_status });
+      }
+      setCalibrationInteraction(null);
+      setModal(null);
+      await refreshStatus();
+      setApiMessage("已继续使用校准文件。");
+    } catch (error) {
+      setApiError(error.message || "继续校准失败，请检查后端。");
+    }
+  };
+
+  const handleStopCalibration = async () => {
+    setCalibrationInteraction(null);
+    await handleStopTask();
+  };
   const handleResetTask = async () => {
     try {
       setApiError("");
@@ -837,6 +868,38 @@ export default function App() {
       );
     }
 
+    if (modal === "calibration") {
+      content = (
+        <>
+          <AlertTriangle className="mx-auto mb-5 h-14 w-14 text-yellow-300" />
+          <h3 className="text-center text-3xl font-black text-white">
+            机械臂校准确认
+          </h3>
+          <p className="mt-4 text-center text-slate-300">
+            LeRobot 检测到电机当前校准值和校准文件不一致。请选择继续使用已提供的校准文件，或停止当前任务。
+          </p>
+          {calibrationInteraction?.excerpt && (
+            <p className="mt-4 rounded-2xl bg-black/25 p-4 text-xs leading-relaxed text-slate-400">
+              {calibrationInteraction.excerpt}
+            </p>
+          )}
+          <div className="mt-6 grid grid-cols-2 gap-3">
+            <button
+              onClick={handleContinueCalibration}
+              className="rounded-2xl bg-emerald-500 p-4 font-bold text-slate-950 hover:bg-emerald-400"
+            >
+              继续
+            </button>
+            <button
+              onClick={handleStopCalibration}
+              className="rounded-2xl bg-red-500 p-4 font-bold text-white hover:bg-red-400"
+            >
+              停止工作
+            </button>
+          </div>
+        </>
+      );
+    }
     if (modal === "alert") {
       content = (
         <>

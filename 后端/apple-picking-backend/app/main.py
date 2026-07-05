@@ -63,7 +63,7 @@ async def status_websocket(websocket: WebSocket) -> None:
     try:
         await websocket.send_json(ui_state_payload(build_ui_state()))
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(1)
             await refresh_policy_status()
             await refresh_robot_status()
             await websocket.send_json(ui_state_payload(build_ui_state()))
@@ -134,6 +134,17 @@ async def stop_local_policy_runtime() -> dict:
         "policy_status": ui_state_payload(build_ui_state()).get("policy_status"),
     }
 
+
+@app.post("/policy/calibration/continue")
+async def continue_policy_calibration() -> dict:
+    result = await lerobot_record_service.confirm_calibration()
+    await task_state.set_policy_status(lerobot_record_service.status())
+    await push_ui_state(task_state.get_mode())
+    return {
+        "success": result.success,
+        "message": result.message,
+        "policy_status": ui_state_payload(build_ui_state()).get("policy_status"),
+    }
 
 @app.get("/policy/status", response_model=PolicyStatus)
 async def get_policy_runtime_status() -> PolicyStatus:

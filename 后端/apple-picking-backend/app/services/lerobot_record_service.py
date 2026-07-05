@@ -2,6 +2,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -10,6 +11,15 @@ from app.models import PolicyStatus, TargetMaturity
 
 
 STOP_TIMEOUT_SECONDS = 8.0
+CALIBRATION_PROMPT_MARKERS = (
+    "Mismatch between calibration values",
+    "Press ENTER to use provided calibration file",
+)
+CALIBRATION_HANDLED_MARKERS = (
+    "Writing calibration file associated with the id",
+    "SO101Follower connected",
+)
+CALIBRATION_INTERACTION_TYPE = "calibration_confirmation"
 SCRIPT_BY_TARGET = {
     TargetMaturity.yellow: "run_lerobot_yellow.bat",
     TargetMaturity.red: "run_lerobot_red.bat",
@@ -27,19 +37,28 @@ class LeRobotRecordService:
         self._process = None  # type: Optional[subprocess.Popen]
         self._script_path = None  # type: Optional[str]
         self._log_file = None
+        self._output_thread = None  # type: Optional[threading.Thread]
         self._last_error = None  # type: Optional[str]
+        self._pending_interaction = None  # type: Optional[dict]
+        self._calibration_prompt_pending = False
+        self._calibration_prompt_handled = False
         self._lock = asyncio.Lock()
+        self._state_lock = threading.Lock()
 
     def status(self) -> PolicyStatus:
         running = self._is_running()
+        with self._state_lock:
+            pending_interaction = self._pending_interaction.copy() if self._pending_interaction else None
+            last_error = self._last_error
         return PolicyStatus(
             running=running,
             loaded=running,
-            paused=False,
+            paused=pending_interaction is not None,
             model_path=self._script_path,
             inference_hz=0,
             loop_hz=0,
-            last_error=self._last_error,
+            last_error=last_error,
+            pending_interaction=pending_interaction,
         )
 
     async def start(self, target_maturity: Optional[TargetMaturity]) -> LeRobotRecordResult:
@@ -51,12 +70,13 @@ class LeRobotRecordService:
             try:
                 script_path = _resolve_start_script(target_maturity)
             except Exception as exc:
-                self._last_error = str(exc)
+                self._set_error(str(exc))
                 self._script_path = None
-                return LeRobotRecordResult(False, self._last_error)
+                return LeRobotRecordResult(False, str(exc))
 
             self._script_path = str(script_path)
-            self._last_error = None
+            self._set_error(None)
+            self._reset_calibration_prompt_state()
 
             try:
                 command = _popen_command(script_path)
@@ -65,39 +85,69 @@ class LeRobotRecordService:
                 self._process = subprocess.Popen(
                     command,
                     cwd=str(_backend_dir()),
-                    stdout=self._log_file,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    stdin=subprocess.DEVNULL,
+                    stdin=subprocess.PIPE,
                     shell=False,
                     env=os.environ.copy(),
                     creationflags=_creation_flags(),
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
                 )
+                self._start_output_reader(self._process)
                 await asyncio.sleep(0.5)
                 if self._process.poll() is not None:
                     code = self._process.returncode
-                    self._last_error = f"lerobot.record exited immediately with code {code}; see {_log_path()}"
+                    message = f"lerobot.record exited immediately with code {code}; see {_log_path()}"
+                    self._set_error(message)
                     self._process = None
+                    self._join_output_thread()
                     self._close_log_file()
-                    return LeRobotRecordResult(False, self._last_error)
+                    return LeRobotRecordResult(False, message)
             except Exception as exc:
-                self._last_error = f"{type(exc).__name__}: {exc}"
+                message = f"{type(exc).__name__}: {exc}"
+                self._set_error(message)
                 self._close_log_file()
-                return LeRobotRecordResult(False, f"lerobot.record start failed: {self._last_error}")
+                return LeRobotRecordResult(False, f"lerobot.record start failed: {message}")
 
             return LeRobotRecordResult(True, f"lerobot.record started via script; script={script_path}; log={_log_path()}")
+
+    async def confirm_calibration(self) -> LeRobotRecordResult:
+        async with self._lock:
+            if self._process is None or self._process.poll() is not None:
+                return LeRobotRecordResult(False, "lerobot.record is not running")
+            if self._process.stdin is None:
+                return LeRobotRecordResult(False, "lerobot.record stdin is not available")
+            try:
+                self._process.stdin.write("\n")
+                self._process.stdin.flush()
+            except Exception as exc:
+                message = f"{type(exc).__name__}: {exc}"
+                self._set_error(message)
+                return LeRobotRecordResult(False, f"failed to confirm calibration: {message}")
+
+            self._mark_calibration_prompt_handled()
+            self._set_error(None)
+            return LeRobotRecordResult(True, "calibration confirmation sent")
 
     async def stop(self) -> LeRobotRecordResult:
         async with self._lock:
             if self._process is None:
                 self._close_log_file()
+                self._reset_calibration_prompt_state()
                 return LeRobotRecordResult(True, "lerobot.record is not running")
 
             if self._process.poll() is not None:
                 code = self._process.returncode
-                self._last_error = f"lerobot.record exited with code {code}"
+                message = f"lerobot.record exited with code {code}"
+                self._set_error(message)
                 self._process = None
+                self._reset_calibration_prompt_state()
+                self._join_output_thread()
                 self._close_log_file()
-                return LeRobotRecordResult(True, self._last_error)
+                return LeRobotRecordResult(True, message)
 
             pid = self._process.pid
             self._process.terminate()
@@ -112,6 +162,8 @@ class LeRobotRecordService:
                     pass
 
             self._process = None
+            self._reset_calibration_prompt_state()
+            self._join_output_thread()
             self._close_log_file()
             return LeRobotRecordResult(True, "lerobot.record stopped")
 
@@ -121,20 +173,62 @@ class LeRobotRecordService:
         code = self._process.poll()
         if code is None:
             return True
-        self._last_error = f"lerobot.record exited with code {code}"
+        self._set_error(f"lerobot.record exited with code {code}")
         self._process = None
+        self._reset_calibration_prompt_state()
+        self._join_output_thread()
         self._close_log_file()
         return False
 
     def _cleanup_finished_process(self) -> None:
         if self._process is not None and self._process.poll() is not None:
-            self._last_error = f"lerobot.record exited with code {self._process.returncode}"
+            self._set_error(f"lerobot.record exited with code {self._process.returncode}")
             self._process = None
+            self._reset_calibration_prompt_state()
+            self._join_output_thread()
             self._close_log_file()
+
+    def _start_output_reader(self, process: subprocess.Popen) -> None:
+        self._output_thread = threading.Thread(target=self._read_process_output, args=(process,), daemon=True)
+        self._output_thread.start()
+
+    def _read_process_output(self, process: subprocess.Popen) -> None:
+        if process.stdout is None:
+            return
+
+        recent_output = ""
+        while True:
+            try:
+                chunk = process.stdout.read(1)
+            except Exception as exc:
+                self._write_log(f"\n[backend] failed reading lerobot.record output: {type(exc).__name__}: {exc}\n")
+                break
+            if not chunk:
+                break
+
+            self._write_log(chunk)
+            recent_output = (recent_output + chunk)[-5000:]
+            if _is_calibration_handled(recent_output):
+                self._mark_calibration_prompt_handled()
+            elif self._should_emit_calibration_prompt(recent_output):
+                self._set_calibration_interaction(recent_output)
+
+    def _join_output_thread(self) -> None:
+        if self._output_thread is not None and self._output_thread.is_alive():
+            self._output_thread.join(timeout=1)
+        self._output_thread = None
 
     def _open_log_file(self) -> None:
         _log_path().parent.mkdir(parents=True, exist_ok=True)
         self._log_file = open(_log_path(), "a", encoding="utf-8", buffering=1)
+
+    def _write_log(self, text: str) -> None:
+        if self._log_file is None:
+            return
+        try:
+            self._log_file.write(text)
+        except Exception:
+            pass
 
     def _close_log_file(self) -> None:
         if self._log_file is not None:
@@ -153,6 +247,42 @@ class LeRobotRecordService:
         self._log_file.write("source=script\n")
         self._log_file.write(f"script={script_path}\n")
         self._log_file.write(f"command={_display_command(command)}\n")
+
+    def _set_error(self, message: Optional[str]) -> None:
+        with self._state_lock:
+            self._last_error = message
+
+    def _reset_calibration_prompt_state(self) -> None:
+        with self._state_lock:
+            self._pending_interaction = None
+            self._calibration_prompt_pending = False
+            self._calibration_prompt_handled = False
+
+    def _mark_calibration_prompt_handled(self) -> None:
+        with self._state_lock:
+            self._pending_interaction = None
+            self._calibration_prompt_pending = False
+            self._calibration_prompt_handled = True
+
+    def _should_emit_calibration_prompt(self, recent_output: str) -> bool:
+        with self._state_lock:
+            if self._calibration_prompt_pending or self._calibration_prompt_handled:
+                return False
+        return _is_calibration_prompt(recent_output)
+
+    def _set_calibration_interaction(self, recent_output: str) -> None:
+        interaction = {
+            "type": CALIBRATION_INTERACTION_TYPE,
+            "title": "Calibration confirmation required",
+            "message": "LeRobot detected a mismatch between motor calibration values and the calibration file. Continue to use the provided calibration file, or stop the task.",
+            "excerpt": _compact_prompt_excerpt(recent_output),
+        }
+        with self._state_lock:
+            if self._calibration_prompt_pending or self._calibration_prompt_handled:
+                return
+            self._pending_interaction = interaction
+            self._calibration_prompt_pending = True
+            self._last_error = "CALIBRATION_CONFIRMATION_REQUIRED: Press ENTER to use provided calibration file."
 
 
 def _resolve_start_script(target_maturity: Optional[TargetMaturity]) -> Path:
@@ -194,6 +324,18 @@ def _popen_command(script_path: Path) -> list[str]:
 
 def _display_command(command: list[str]) -> str:
     return " ".join(command)
+
+
+def _is_calibration_prompt(output: str) -> bool:
+    return all(marker in output for marker in CALIBRATION_PROMPT_MARKERS)
+
+
+def _is_calibration_handled(output: str) -> bool:
+    return any(marker in output for marker in CALIBRATION_HANDLED_MARKERS)
+
+
+def _compact_prompt_excerpt(output: str) -> str:
+    return " ".join(output.split())[-500:]
 
 
 def _env(name: str) -> Optional[str]:

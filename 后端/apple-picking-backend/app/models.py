@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -37,6 +37,7 @@ class PolicyStatus(BaseModel):
     inference_hz: float = 0
     loop_hz: float = 0
     last_error: Optional[str] = None
+    pending_interaction: Optional[dict[str, Any]] = None
     source: str = "policy_runtime_service"
 
 

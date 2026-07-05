@@ -48,6 +48,11 @@ export function stopTask() {
   });
 }
 
+export function continuePolicyCalibration() {
+  return request("/policy/calibration/continue", {
+    method: "POST",
+  });
+}
 export function resetTask() {
   return request("/reset", { method: "POST" });
 }
