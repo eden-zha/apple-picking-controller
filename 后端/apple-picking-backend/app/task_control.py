@@ -2,8 +2,7 @@ from typing import Optional, Tuple
 
 from app.adapters.robot_client import RawRobotState
 from app.models import ExecutionMode
-from app.services.policy_runtime_service import policy_runtime_service
-from app.services.vision_service import vision_service
+from app.services.lerobot_record_service import lerobot_record_service
 from app.status_fusion import build_ui_state
 from app.state_manager import task_state
 from app.websocket_manager import websocket_manager
@@ -31,17 +30,16 @@ async def execute_task(mode: ExecutionMode) -> Tuple[bool, str]:
         await push_ui_state(ExecutionMode.robot_pc)
         return False, message
 
-    await vision_service.start()
     target_maturity = task_state.get_target_maturity()
-    result = await policy_runtime_service.start(target_maturity=target_maturity)
-    await task_state.set_policy_status(policy_runtime_service.status())
+    result = await lerobot_record_service.start(target_maturity=target_maturity)
+    await task_state.set_policy_status(lerobot_record_service.status())
 
     if not result.success:
         await task_state.mark_error(result.message)
         await push_ui_state(ExecutionMode.robot_pc)
         return False, result.message
 
-    await task_state.start_running("YOLO vision and robot PC arm control running")
+    await task_state.start_running("LeRobot record policy process running")
     await task_state.add_log(result.message)
     await push_ui_state(ExecutionMode.robot_pc)
     return True, result.message
@@ -49,9 +47,8 @@ async def execute_task(mode: ExecutionMode) -> Tuple[bool, str]:
 
 async def stop_robot_task(mode: ExecutionMode = ExecutionMode.robot_pc) -> Tuple[bool, str]:
     await task_state.set_mode(ExecutionMode.robot_pc)
-    result = await policy_runtime_service.stop()
-    await vision_service.stop()
-    await task_state.set_policy_status(policy_runtime_service.status())
+    result = await lerobot_record_service.stop()
+    await task_state.set_policy_status(lerobot_record_service.status())
     stopped, local_message = await task_state.stop()
     await push_ui_state(ExecutionMode.robot_pc)
 

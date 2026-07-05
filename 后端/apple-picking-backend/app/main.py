@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.adapters import robot_client
 from app.models import CommandResponse, LogsResponse, PolicyStatus, TargetAppleRequest, TaskCommandRequest, UIStateResponse, VisionStatus
 from app.status_fusion import build_ui_state
-from app.services.policy_runtime_service import policy_runtime_service
+from app.services.lerobot_record_service import lerobot_record_service
 from app.services.vision_service import vision_service
 from app.state_manager import task_state
 from app.task_control import execute_task, push_ui_state, stop_robot_task
@@ -39,7 +39,7 @@ def ui_state_payload(ui_state: UIStateResponse) -> dict:
 
 
 async def refresh_policy_status() -> None:
-    await task_state.set_policy_status(policy_runtime_service.status())
+    await task_state.set_policy_status(lerobot_record_service.status())
 
 
 async def refresh_robot_status() -> None:
@@ -114,9 +114,8 @@ async def start_local_policy_runtime(request: Optional[TargetAppleRequest] = Non
     target_maturity = request.target_maturity if request is not None else task_state.get_target_maturity()
     if request is not None:
         await task_state.set_target_maturity(request.target_maturity)
-    await vision_service.start()
-    result = await policy_runtime_service.start(target_maturity=target_maturity)
-    await task_state.set_policy_status(policy_runtime_service.status())
+    result = await lerobot_record_service.start(target_maturity=target_maturity)
+    await task_state.set_policy_status(lerobot_record_service.status())
     return {
         "success": result.success,
         "message": result.message,
@@ -126,9 +125,9 @@ async def start_local_policy_runtime(request: Optional[TargetAppleRequest] = Non
 
 @app.post("/policy/stop")
 async def stop_local_policy_runtime() -> dict:
-    result = await policy_runtime_service.stop()
+    result = await lerobot_record_service.stop()
     await vision_service.stop()
-    await task_state.set_policy_status(policy_runtime_service.status())
+    await task_state.set_policy_status(lerobot_record_service.status())
     return {
         "success": result.success,
         "message": result.message,
@@ -138,8 +137,8 @@ async def stop_local_policy_runtime() -> dict:
 
 @app.get("/policy/status", response_model=PolicyStatus)
 async def get_policy_runtime_status() -> PolicyStatus:
-    await task_state.set_policy_status(policy_runtime_service.status())
-    return policy_runtime_service.status()
+    await task_state.set_policy_status(lerobot_record_service.status())
+    return lerobot_record_service.status()
 
 
 @app.get("/vision/status", response_model=VisionStatus)
@@ -149,7 +148,7 @@ async def get_vision_status() -> VisionStatus:
 
 @app.post("/reset", response_model=CommandResponse)
 async def reset_system() -> CommandResponse:
-    await policy_runtime_service.stop()
+    await lerobot_record_service.stop()
     await vision_service.stop()
     await task_state.reset()
     await push_ui_state(task_state.get_mode())

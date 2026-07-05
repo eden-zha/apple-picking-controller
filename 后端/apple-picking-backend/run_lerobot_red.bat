@@ -1,0 +1,3 @@
+@echo off
+cd /d "%~dp0"
+python -m lerobot.record --robot.type=so101_follower --robot.port=COM24 --robot.id=my_awesome_follower_arm --robot.cameras="{ handeye: {type: opencv,index_or_path: 0, width: 640, height: 480, fps: 30}, front: {type: opencv,index_or_path: 1, width: 640, height: 480, fps: 30}}" --display_data=true --dataset.repo_id=%HF_USER%/eval_so101 --dataset.single_task="Grab the screwdriver" --policy.path=outputs/train/red_policy/checkpoints/100000/pretrained_model --dataset.push_to_hub=false
