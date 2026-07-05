@@ -1,110 +1,118 @@
-# 苹果采摘后端与 Robot PC 控制入口
+# 后端说明
 
-本项目的主后端只负责接收前端指令、维护任务状态，并通过 HTTP 控制 robot PC。摄像头、训练好的识别/策略模型、SO-ARM101 机械臂控制程序都运行在 robot PC 上。
+这是苹果采摘控制系统的 FastAPI 后端。后端负责接收前端指令、维护任务状态、启动/停止 LeRobot 外部进程，并通过 HTTP/WebSocket 向前端返回状态。
 
-## 控制边界
-
-主后端不直接读取 USB 摄像头画面。
-
-主后端不直接运行 YOLO 或其他视觉模型。
-
-主后端不直接控制机械臂串口、USB 或 SDK。
-
-主后端只通过 HTTP 调用 robot PC：
+当前主链路：
 
 ```text
-POST http://<robot-pc>:8000/robot/start
-POST http://<robot-pc>:8000/robot/stop
+前端
+  -> FastAPI 后端
+  -> app/task_control.py
+  -> app/services/lerobot_record_service.py
+  -> run_lerobot_yellow.bat / run_lerobot_red.bat
+  -> python -m lerobot.record
 ```
 
-## Robot PC 执行链路
+后端负责启动和停止 LeRobot record 外部进程。机械臂、摄像头和 policy 由 LeRobot record 进程负责。
 
-robot PC 上运行 `后端/robot_pc_placeholder.py`，它现在是机器人电脑控制入口。
-
-当 robot PC 收到：
+## 主要文件
 
 ```text
-POST /robot/start
+app/main.py                         # FastAPI 路由和 WebSocket
+app/task_control.py                 # 任务开始/停止编排
+app/status_fusion.py                # UI 状态融合
+app/services/lerobot_record_service.py
+                                    # LeRobot 外部进程启动/停止/状态
+app/services/vision_service.py      # OpenCV YOLO 视觉服务代码
+run_lerobot_yellow.bat              # yellow policy 启动脚本
+run_lerobot_red.bat                 # red policy 启动脚本
+logs/lerobot_record.log             # LeRobot stdout/stderr 日志
 ```
 
-它会启动本机已经配置好的抓取主程序。这个抓取程序负责：
+## 启动后端
 
-- 调用 robot PC 上连接的 USB 摄像头
-- 加载并运行本机训练好的模型
-- 识别苹果
-- 驱动 SO-ARM101 机械臂执行抓取
-
-当 robot PC 收到：
-
-```text
-POST /robot/stop
+```bat
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-它会停止正在运行的抓取程序，并由抓取程序释放摄像头、模型推理进程和机械臂资源。
+如果机器上存在多个 Python 环境，应显式使用已配置 LeRobot 的 Python。
 
-## Robot PC 环境变量
-
-推荐配置：
+接口文档：
 
 ```text
-ROBOT_GRASP_START_CMD=python D:\robot\apple_grasp\run_grasp.py
-ROBOT_GRASP_WORKDIR=D:\robot\apple_grasp
-ROBOT_GRASP_STOP_CMD=python D:\robot\apple_grasp\stop_grasp.py
+http://127.0.0.1:8000/docs
 ```
 
-`ROBOT_GRASP_START_CMD` 指向 robot PC 本地的真实抓取程序。该程序内部可以运行 YOLO、LeRobot policy、摄像头采集和机械臂控制逻辑。
+## LeRobot 脚本选择
 
-如果没有配置 `ROBOT_GRASP_START_CMD`，服务会保留原有占位 fallback：
+`lerobot_record_service` 按以下优先级选择启动脚本：
+
+1. 如果设置了 `LEROBOT_RECORD_SCRIPT`，执行它指向的 `.bat`。
+2. 否则根据 `target_maturity` 选择：
+   - `yellow` -> `run_lerobot_yellow.bat`
+   - `red` -> `run_lerobot_red.bat`
+3. 如果脚本不存在，返回明确错误：
 
 ```text
-POLICY_SERVER_START_CMD=...
-ROBOT_CLIENT_START_CMD=...
-POLICY_RUNTIME_START_CMD=...
+LeRobot record script not found: <path>
 ```
 
-如果这些旧命令也没有配置，`/robot/start` 会进入 placeholder fallback，只用于联调 HTTP 链路，不代表真实机械臂已经运动。
+后端不再 fallback 到代码里写死的长命令。
 
-## 主后端 remote 模式
+## Windows 启动方式
 
-主后端 remote 模式只负责调度 robot PC：
+Windows 下执行 `.bat` 的方式为：
 
 ```text
-frontend
-  -> FastAPI 主后端
-  -> HTTP /robot/start
-  -> robot PC 抓取程序
-  -> USB 摄像头 + 训练模型 + SO-ARM101
+cmd.exe /d /s /c call <script_path>
 ```
 
-停止链路：
+工作目录为后端目录 `apple-picking-backend`。stdout/stderr 会写入：
 
 ```text
-frontend
-  -> FastAPI 主后端
-  -> HTTP /robot/stop
-  -> robot PC 停止抓取程序并释放资源
+logs/lerobot_record.log
 ```
 
-## 后续状态回传
+日志开头会打印 `sys.executable`、`cwd`、脚本路径和实际命令。
 
-当前主链路只要求 start/stop。后续如果前端需要展示识别数量、抓取数量、相机帧率、机械臂状态或异常信息，可以在 robot PC 服务中增加：
+## 停止逻辑
+
+`POST /stop` 会调用 `lerobot_record_service.stop()`。Windows 下会终止 LeRobot 进程树，避免只杀掉 `cmd.exe` 而留下真正的 `python -m lerobot.record` 继续占用机械臂 COM 口。
+
+## 校准确认
+
+当 LeRobot 输出校准确认提示时，后端会设置 `policy_status.pending_interaction`，前端弹窗让用户选择继续或停止。
+
+用户点击继续后，前端调用：
 
 ```text
-GET /robot/status
-WebSocket /robot/status/ws
+POST /policy/calibration/continue
 ```
 
-然后由主后端转发或融合这些状态给前端。
+后端向 LeRobot 子进程 stdin 写入 Enter。
 
-## 主后端接口
-
-前端接口保持不变：
+## 常用接口
 
 ```text
+POST /set_target_apple
 POST /start_task
 POST /stop
-GET /status
+POST /reset
+GET  /status
+GET  /logs
+GET  /policy/status
+POST /policy/calibration/continue
+GET  /vision/status
+WebSocket /ws/status
+WebSocket /ws/vision
 ```
 
-主后端内部根据 local/remote 配置决定是否调用 robot PC。前端不需要知道摄像头、模型或机械臂程序运行在哪里。
+## policy_status 含义
 
+当前 `policy_status` 代表 LeRobot record 外部进程状态：
+
+- `running`: LeRobot 进程仍存在。
+- `loaded`: 随 `running` 表示 LeRobot 进程已启动。
+- `model_path`: 当前执行的脚本路径。
+- `last_error`: 启动或运行阶段记录的错误。
+- `pending_interaction`: 校准确认等需要前端响应的交互。

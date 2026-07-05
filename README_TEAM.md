@@ -1,148 +1,108 @@
-# 苹果采摘系统：团队使用说明
+# 团队使用说明
 
-本系统为真实机器人AI控制系统：
-控制链采用 policy_runtime_service + robot_client 的闭环执行架构。
-mock_task 仅用于UI兜底显示，不参与任何机器人控制。
+这份文档描述当前已经实现并仍在使用的项目运行方式。
 
-## 项目说明
-
-本项目包含：
-
-- React/Vite 前端 UI：位于 `前端` 目录下。
-- FastAPI 后端：`后端\apple-picking-backend`。
-- AI 推理层：`policy_runtime_service`，负责调用 LeRobot ACT policy。
-- 机器人执行层：`robot_client`，负责向 SO-ARM101 发送动作。
-- Windows 一键启动脚本：`start.bat`。
-
-真实控制链统一为：
+当前控制链路：
 
 ```text
-frontend
-  -> FastAPI backend
+前端
+  -> FastAPI 后端
   -> task_control
-  -> policy_runtime_service
-  -> LeRobot ACT policy inference
-  -> robot_client
-  -> SO-ARM101 robot execution
+  -> lerobot_record_service
+  -> run_lerobot_*.bat
+  -> python -m lerobot.record
 ```
 
-`mock_task` 不是控制系统，只能作为 UI fallback 的展示数据来源。
+LeRobot record 进程负责连接机械臂、摄像头和 policy。后端负责启动/停止该外部进程、维护状态并向前端推送信息。
 
-## 首次使用前的准备
+## 项目组成
 
-请先安装：
+- 前端：`前端/keyon-apple-ui - 前端`
+- 后端：`后端/apple-picking-backend`
+- LeRobot 启动服务：`后端/apple-picking-backend/app/services/lerobot_record_service.py`
+- yellow 脚本：`后端/apple-picking-backend/run_lerobot_yellow.bat`
+- red 脚本：`后端/apple-picking-backend/run_lerobot_red.bat`
 
-- Python 3.12，或其他 Python 3.10+ 版本。
-- Node.js LTS（自带 npm）。
-- 建议安装 VS Code，方便查看和调试项目。
+## 环境准备
 
-不要复制或依赖其他成员电脑上的 `venv`。Python 虚拟环境包含本机路径和平台相关文件，应由每位组员在自己的电脑上创建。
+- 前端需要 Node.js 和 npm。
+- 后端需要能运行 FastAPI 的 Python 环境。
+- 运行 LeRobot 的 Python 环境必须已经安装并验证 LeRobot、torch、摄像头、机械臂串口和 policy 权重。
 
-## 首次运行
+不要直接复制其他电脑上的虚拟环境。Python/conda/venv 环境包含本机路径和平台相关依赖，应在实际运行电脑上配置并验证。
 
-以下命令均在项目根目录打开终端后执行。
+## 前端运行
 
-1. 进入后端目录，创建并激活自己的虚拟环境：
+```bat
+cd /d "前端\keyon-apple-ui - 前端"
+npm.cmd install
+npm.cmd run dev
+```
 
-   ```bat
-   cd /d "后端\apple-picking-backend"
-   python -m venv .venv
-   .venv\Scripts\activate.bat
-   ```
+构建检查：
 
-2. 安装后端依赖：
+```bat
+npm.cmd run build
+```
 
-   ```bat
-   python -m pip install -r requirements.txt
-   ```
+## 后端运行
 
-3. 返回项目根目录，进入当前前端项目目录并安装前端依赖：
+```bat
+cd /d "后端\apple-picking-backend"
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
 
-   ```bat
-   cd /d "..\..\前端\keyon-apple-ui - 前端"
-   npm.cmd install
-   ```
+如果机器上有多个 Python 环境，应显式使用已配置 LeRobot 的 Python。
 
-4. 返回项目根目录，双击 `start.bat`。脚本会自动调用 `launcher.py`，启动后端和前端，并打开 <http://localhost:5173>。
-
-后端接口文档默认地址为 <http://127.0.0.1:8000/docs>。
-
-## 运行模式说明
-
-local 和 remote 是同一套 AI 控制系统的两种部署方式，控制语义保持一致。
-
-### local 模式
+接口文档：
 
 ```text
-backend
-  -> policy_runtime_service（本机进程）
-  -> robot_client
-  -> SO-ARM101
+http://127.0.0.1:8000/docs
 ```
 
-### remote 模式
+## 开始任务
+
+前端点击开始后：
+
+1. 调用 `POST /start_task`。
+2. 后端读取当前 `target_maturity`。
+3. `yellow` 启动 `run_lerobot_yellow.bat`。
+4. `red` 启动 `run_lerobot_red.bat`。
+5. LeRobot record 进程开始连接机械臂、摄像头和 policy。
+
+也可以通过 `LEROBOT_RECORD_SCRIPT` 指定要执行的 `.bat` 脚本。
+
+## 停止任务
+
+前端点击停止后：
+
+1. 调用 `POST /stop`。
+2. 后端停止 LeRobot record 外部进程。
+3. Windows 下会清理子进程树，避免真实 `python -m lerobot.record` 留在后台继续占用 COM 口。
+
+## 校准确认
+
+当 LeRobot 输出校准确认提示时，后端会通过 `policy_status.pending_interaction` 通知前端。前端弹窗提供：
+
+- 继续：调用 `POST /policy/calibration/continue`，后端向 LeRobot stdin 写入 Enter。
+- 停止：调用停止任务流程。
+
+## 日志
+
+LeRobot 外部进程 stdout/stderr 写入：
 
 ```text
-backend
-  -> HTTP
-  -> Robot PC
-  -> policy_runtime_service（远程进程）
-  -> robot_client
-  -> SO-ARM101
+后端/apple-picking-backend/logs/lerobot_record.log
 ```
 
-remote 模式下，主后端只负责把任务请求送到 Robot PC 上的 policy runtime，不允许绕过 policy runtime 直接驱动机器人。
+前端顶部“运行日志”用于展示后端任务日志，已适配不同窗口大小。
 
-## UI 展示链
+## 状态显示
 
-UI 状态展示链为：
+前端“机器人状态”显示规则：
 
-```text
-robot_status + backend_state + optional mock fallback
-  -> status_fusion
-  -> websocket / HTTP
-  -> frontend UI
-```
+- `policy_status.running == true`：显示“作业中”。
+- 否则如果 `robot_status.running == true`：显示“运行中”。
+- 否则显示“未运行”。
 
-mock fallback 仅用于状态展示兜底，不生成 action，不参与 `policy_runtime_service -> robot_client -> SO-ARM101` 执行闭环。
-
-## 苹果成熟度分级控制
-
-UI 到 policy 的统一映射如下：
-
-| UI 选项 | 后端字段 | Policy input |
-| --- | --- | --- |
-| 成熟果（红苹果） | `target_maturity: "red"` | `target_maturity="red"` |
-| 半成熟果（黄苹果） | `target_maturity: "yellow"` | `target_maturity="yellow"` |
-
-yellow apple 表示半成熟果控制策略。`task_control` 不再使用旧的“只红/多摘/半摘”逻辑；local 和 remote 均将同一个 `target_maturity` 传入 `policy_runtime_service`，再由推理循环注入 policy input，`robot_client` 接口保持不变。
-
-## 当前可用能力
-
-- 设置目标成熟度：`red` / `yellow`。
-- 开始采摘任务。
-- 紧急停止任务。
-- 查询任务状态、机器人状态、policy 状态和运行日志。
-- 通过 local 或 remote 部署方式进入同一套真实 policy + robot_client 闭环。
-
-## 当前 UI 展示项说明
-
-A/B/C 区域、路线、电量、天气、果筐容量、剩余时间等页面元素属于展示层数据。只有来自真实 `robot_status` 或明确标注为 mock fallback 的数据才应展示；mock 数据不代表控制系统已经执行对应动作。
-
-## 环境变量
-
-常用配置：
-
-- `LEROBOT_POLICY_MODEL_PATH`：LeRobot ACT policy 模型路径。
-- `POLICY_INFERENCE_HZ`：policy 推理频率，例如 `20`。
-- `POLICY_RUNTIME_REMOTE_URL`：remote 模式下 Robot PC 的 policy runtime 地址。
-- `LOCAL_ROBOT_CLIENT_URL`：local 模式下 robot_client 服务地址。
-- `SO_ARM101_ROBOT_FACTORY`：可选的本机 SO-ARM101 Python 工厂函数。
-
-## 验证方式
-
-1. 打开 <http://127.0.0.1:8000/docs>，确认 FastAPI 后端运行。
-2. 打开前端页面，设置采摘目标并点击开始采摘。
-3. 查看 `/status`、WebSocket 或页面状态，确认状态来自 `status_fusion`。
-4. 检查日志中任务进入 `task_control -> policy_runtime_service -> robot_client` 链路。
-5. 如机器人或 policy 不可用，系统应进入暂停、错误或 UI fallback 展示状态。
+右上角时间来自前端运行设备的本地时间，显示到分钟。
