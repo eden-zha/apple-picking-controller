@@ -1,6 +1,8 @@
 import asyncio
 import glob
+import logging
 import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +14,7 @@ from app.services.vision_service import vision_service
 
 
 DEFAULT_TARGET_HZ = 20.0
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -31,6 +34,7 @@ class PolicyRuntimeService:
         self._loop_hz = 0.0
         self._inference_hz = _float_env("POLICY_INFERENCE_HZ", DEFAULT_TARGET_HZ)
         self._last_action = None
+        self._device = None  # type: Optional[str]
         self._target_maturity = None  # type: Optional[TargetMaturity]
         self._lock = asyncio.Lock()
 
@@ -61,8 +65,10 @@ class PolicyRuntimeService:
                     self._last_error = robot_start.message
                     return PolicyCommandResult(False, robot_start.message)
             except Exception as exc:
-                self._last_error = str(exc)
-                return PolicyCommandResult(False, f"policy runtime start failed: {exc}")
+                error_message = _format_exception_message(exc)
+                logger.exception("Policy runtime start failed.")
+                self._last_error = error_message
+                return PolicyCommandResult(False, f"policy runtime start failed: {error_message}")
 
             self._running = True
             self._paused = False
@@ -141,14 +147,18 @@ class PolicyRuntimeService:
 
         model_path = _find_policy_model_path()
         self._model_path = str(model_path)
+        cuda_available = _torch_cuda_is_available()
+        device = _select_torch_device(cuda_available)
+        self._device = device
+
+        _print_policy_startup_details(model_path, cuda_available, device)
 
         try:
             self._policy = _load_lerobot_act_policy(model_path)
         except Exception as exc:
-            raise RuntimeError(
-                "Unable to load LeRobot ACT policy. Install lerobot/torch and set "
-                "LEROBOT_POLICY_MODEL_PATH to outputs/train/**/pretrained_model."
-            ) from exc
+            self._last_error = _format_exception_message(exc)
+            logger.exception("Failed to load LeRobot ACT policy from %s.", model_path)
+            raise
 
     def _infer_action(self, observation: Any) -> Any:
         if self._policy is None:
@@ -181,7 +191,7 @@ def _find_policy_model_path() -> Path:
     if configured:
         path = Path(configured)
         if path.exists():
-            return path
+            return path.resolve()
         raise RuntimeError(f"LEROBOT_POLICY_MODEL_PATH does not exist: {configured}")
 
     candidates = sorted(
@@ -190,21 +200,68 @@ def _find_policy_model_path() -> Path:
         reverse=True,
     )
     if candidates:
-        return Path(candidates[0])
+        return Path(candidates[0]).resolve()
 
     raise RuntimeError("No LeRobot pretrained_model found under outputs/train/**/pretrained_model.")
 
 
-def _load_lerobot_act_policy(model_path: Path) -> Any:
-    try:
-        from lerobot.common.policies.act.modeling_act import ACTPolicy
-    except Exception:
-        from lerobot.common.policies.act import ACTPolicy
+def _select_torch_device(cuda_available: bool) -> str:
+    return "cuda" if cuda_available else "cpu"
 
+
+def _torch_cuda_is_available() -> bool:
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        logger.exception("Unable to evaluate torch.cuda.is_available().")
+        raise
+
+
+def _load_lerobot_act_policy(model_path: Path) -> Any:
+    ACTPolicy = _import_act_policy()
     policy = ACTPolicy.from_pretrained(str(model_path))
     if hasattr(policy, "eval"):
         policy.eval()
     return policy
+
+
+def _import_act_policy() -> Any:
+    attempts = [
+        "lerobot.policies.act.modeling_act:ACTPolicy",
+        "lerobot.policies.act:ACTPolicy",
+        "lerobot.common.policies.act.modeling_act:ACTPolicy",
+        "lerobot.common.policies.act:ACTPolicy",
+    ]
+
+    errors = []
+    for target in attempts:
+        module_name, attr_name = target.split(":", 1)
+        try:
+            module = __import__(module_name, fromlist=[attr_name])
+            return getattr(module, attr_name)
+        except Exception as exc:
+            errors.append(f"{target}: {type(exc).__name__}: {exc}")
+
+    raise ImportError("Could not import ACTPolicy from known LeRobot paths: " + "; ".join(errors))
+
+
+def _print_policy_startup_details(model_path: Path, cuda_available: bool, device: str) -> None:
+    details = [
+        ("sys.executable", sys.executable),
+        ("model_path", str(model_path)),
+        ("torch.cuda.is_available()", cuda_available),
+        ("device", device),
+    ]
+    for key, value in details:
+        message = f"Policy runtime {key}: {value}"
+        logger.info(message)
+        print(message, flush=True)
+
+
+def _format_exception_message(exc: Exception) -> str:
+    return f"{exc.__class__.__name__}: {exc}"
 
 
 def _to_jsonable(value: Any) -> Any:

@@ -13,4 +13,5 @@ build/
 
 # IDE
 .vscode/
-.idea/
+.idea/ºó¶Ë/apple-picking-backend/outputs/
+**/outputs/
