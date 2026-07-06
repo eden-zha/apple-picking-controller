@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from app.models import PolicyStatus, TargetMaturity
+from app.models import PolicyStatus, RobotModel, TargetMaturity
 
 
 STOP_TIMEOUT_SECONDS = 8.0
@@ -20,9 +20,11 @@ CALIBRATION_HANDLED_MARKERS = (
     "SO101Follower connected",
 )
 CALIBRATION_INTERACTION_TYPE = "calibration_confirmation"
-SCRIPT_BY_TARGET = {
-    TargetMaturity.yellow: "run_lerobot_yellow.bat",
-    TargetMaturity.red: "run_lerobot_red.bat",
+SCRIPT_BY_MODEL_AND_TARGET = {
+    (RobotModel.model_a, TargetMaturity.yellow): "run_lerobot_yellow.bat",
+    (RobotModel.model_a, TargetMaturity.red): "run_lerobot_red.bat",
+    (RobotModel.model_b, TargetMaturity.yellow): "run_recorded_action_yellow.bat",
+    (RobotModel.model_b, TargetMaturity.red): "run_recorded_action_red.bat",
 }
 
 
@@ -61,14 +63,18 @@ class LeRobotRecordService:
             pending_interaction=pending_interaction,
         )
 
-    async def start(self, target_maturity: Optional[TargetMaturity]) -> LeRobotRecordResult:
+    async def start(
+        self,
+        target_maturity: Optional[TargetMaturity],
+        robot_model: RobotModel = RobotModel.model_a,
+    ) -> LeRobotRecordResult:
         async with self._lock:
             if self._is_running():
                 return LeRobotRecordResult(True, "lerobot.record is already running")
 
             self._cleanup_finished_process()
             try:
-                script_path = _resolve_start_script(target_maturity)
+                script_path = _resolve_start_script(target_maturity, robot_model)
             except Exception as exc:
                 self._set_error(str(exc))
                 self._script_path = None
@@ -296,16 +302,19 @@ class LeRobotRecordService:
             self._last_error = "CALIBRATION_CONFIRMATION_REQUIRED: Press ENTER to use provided calibration file."
 
 
-def _resolve_start_script(target_maturity: Optional[TargetMaturity]) -> Path:
+def _resolve_start_script(target_maturity: Optional[TargetMaturity], robot_model: RobotModel) -> Path:
     configured = _env("LEROBOT_RECORD_SCRIPT")
     if configured:
         script_path = _resolve_script_path(configured)
     else:
         if target_maturity is None:
             raise RuntimeError("target_maturity is required to select LeRobot record script")
-        script_name = SCRIPT_BY_TARGET.get(target_maturity)
+        script_name = SCRIPT_BY_MODEL_AND_TARGET.get((robot_model, target_maturity))
         if script_name is None:
-            raise RuntimeError(f"Unsupported target_maturity for LeRobot record script: {target_maturity}")
+            raise RuntimeError(
+                f"Unsupported model/target_maturity for LeRobot record script: "
+                f"robot_model={robot_model}, target_maturity={target_maturity}"
+            )
         script_path = (_backend_dir() / script_name).resolve()
 
     if not script_path.exists():

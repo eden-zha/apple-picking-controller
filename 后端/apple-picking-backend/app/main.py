@@ -5,7 +5,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.adapters import robot_client
-from app.models import CommandResponse, LogsResponse, PolicyStatus, TargetAppleRequest, TaskCommandRequest, UIStateResponse, VisionStatus
+from app.models import CommandResponse, LogsResponse, PolicyStatus, RobotModelRequest, TargetAppleRequest, TaskCommandRequest, UIStateResponse, VisionStatus
 from app.status_fusion import build_ui_state
 from app.services.lerobot_record_service import lerobot_record_service
 from app.services.vision_service import vision_service
@@ -97,6 +97,17 @@ async def set_target_apple(request: TargetAppleRequest) -> CommandResponse:
     )
 
 
+@app.post("/set_robot_model", response_model=CommandResponse)
+async def set_robot_model(request: RobotModelRequest) -> CommandResponse:
+    await task_state.set_robot_model(request.robot_model)
+    await push_ui_state(task_state.get_mode())
+    return CommandResponse(
+        success=True,
+        message=f"robot_model set to {request.robot_model.value}.",
+        status=build_ui_state(),
+    )
+
+
 @app.post("/start_task", response_model=CommandResponse)
 async def start_task(request: Optional[TaskCommandRequest] = None) -> CommandResponse:
     started, message = await execute_task(TaskCommandRequest().mode)
@@ -114,7 +125,10 @@ async def start_local_policy_runtime(request: Optional[TargetAppleRequest] = Non
     target_maturity = request.target_maturity if request is not None else task_state.get_target_maturity()
     if request is not None:
         await task_state.set_target_maturity(request.target_maturity)
-    result = await lerobot_record_service.start(target_maturity=target_maturity)
+    result = await lerobot_record_service.start(
+        target_maturity=target_maturity,
+        robot_model=task_state.get_robot_model(),
+    )
     await task_state.set_policy_status(lerobot_record_service.status())
     return {
         "success": result.success,

@@ -36,6 +36,13 @@ export function setTargetMaturity(targetMaturity) {
   });
 }
 
+export function setRobotModel(robotModel) {
+  return request("/set_robot_model", {
+    method: "POST",
+    body: JSON.stringify({ robot_model: robotModel }),
+  });
+}
+
 export function startTask() {
   return request("/start_task", {
     method: "POST",

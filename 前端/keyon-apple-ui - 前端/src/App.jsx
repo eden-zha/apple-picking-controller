@@ -28,12 +28,14 @@ import {
   Volume2,
   ShieldCheck,
   Activity,
+  ChevronDown,
 } from "lucide-react";
 import {
   continuePolicyCalibration,
   getStatus,
   API_BASE_URL,
   resetTask,
+  setRobotModel as setRobotModelConfig,
   setTargetMaturity,
   startTask,
   stopTask,
@@ -52,6 +54,11 @@ const formatDeviceTime = () =>
 const targetMaturityLabels = {
   red: "成熟果",
   yellow: "半成熟果",
+};
+
+const robotModelLabels = {
+  model_a: "模型A",
+  model_b: "模型B",
 };
 
 const stateLabels = {
@@ -101,6 +108,8 @@ export default function App() {
   const [skipped, setSkipped] = useState(0);
   const [basket] = useState(28);
   const [mode, setMode] = useState("成熟果");
+  const [robotModel, setRobotModel] = useState("model_a");
+  const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const [area, setArea] = useState("A 区");
   const [routeMode, setRouteMode] = useState("自动路线");
   const [modal, setModal] = useState(null);
@@ -143,6 +152,10 @@ export default function App() {
         targetMaturityLabels[nextStatus.target_maturity] ||
           nextStatus.target_maturity
       );
+    }
+
+    if (nextStatus.robot_model) {
+      setRobotModel(nextStatus.robot_model);
     }
 
     if (nextStatus.logs) {
@@ -252,6 +265,20 @@ export default function App() {
       const data = await setTargetMaturity(targetMaturity);
       applyStatus(data);
       setApiMessage(`已设置目标：${targetMaturityLabels[targetMaturity]}`);
+    } catch (error) {
+      setApiError(error.message || "后端未连接，请先启动 FastAPI 服务");
+    }
+  };
+
+  const handleModelSelect = async (item) => {
+    setRobotModel(item);
+    setIsModelMenuOpen(false);
+    setApiError("");
+
+    try {
+      const data = await setRobotModelConfig(item);
+      applyStatus(data);
+      setApiMessage(`已选择模型：${robotModelLabels[item] || item}`);
     } catch (error) {
       setApiError(error.message || "后端未连接，请先启动 FastAPI 服务");
     }
@@ -607,7 +634,42 @@ export default function App() {
   const SettingsPage = () => (
     <div className="grid gap-5">
       <Card className="p-7">
-        <h2 className="mb-6 text-3xl font-black text-white">采摘设置</h2>
+        <div className="mb-6 flex flex-wrap items-center gap-4">
+          <h2 className="text-3xl font-black text-white">采摘设置</h2>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setIsModelMenuOpen((value) => !value)}
+              className="flex min-w-[132px] items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-base font-black text-white transition hover:bg-white/10"
+            >
+              {robotModelLabels[robotModel] || robotModel}
+              <ChevronDown
+                className={`h-5 w-5 text-slate-300 transition ${
+                  isModelMenuOpen ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+
+            {isModelMenuOpen && (
+              <div className="absolute left-0 top-[calc(100%+0.5rem)] z-30 grid w-full gap-2 rounded-2xl border border-white/10 bg-slate-950/95 p-2 shadow-2xl shadow-black/40 backdrop-blur">
+                {["model_a", "model_b"].map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => handleModelSelect(item)}
+                    className={`rounded-xl px-3 py-3 text-left text-sm font-black transition ${
+                      robotModel === item
+                        ? "bg-red-500 text-white"
+                        : "bg-white/5 text-slate-300 hover:bg-white/10"
+                    }`}
+                  >
+                    {robotModelLabels[item]}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
 
         <div className="grid gap-6 lg:grid-cols-3">
           <div>
@@ -996,7 +1058,7 @@ export default function App() {
         <Card className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div className="flex items-center gap-3 text-slate-300">
             <Bot className="h-5 w-5 text-emerald-300" />
-            当前配置：{area} · {mode} · {routeMode} · robot PC 后端
+            当前配置：{area} · {robotModelLabels[robotModel] || robotModel} · {mode} · {routeMode} · robot PC 后端
           </div>
 
           <div className="flex items-center gap-3 text-slate-300">

@@ -67,6 +67,7 @@ def build_ui_state(
         progress=progress,
         mode=current_mode,
         target_maturity=backend_status.target_maturity,
+        robot_model=backend_status.robot_model,
         logs=backend_status.logs,
         robot_status=robot_status,
         policy_status=backend_status.policy_status,

@@ -31,7 +31,11 @@ async def execute_task(mode: ExecutionMode) -> Tuple[bool, str]:
         return False, message
 
     target_maturity = task_state.get_target_maturity()
-    result = await lerobot_record_service.start(target_maturity=target_maturity)
+    robot_model = task_state.get_robot_model()
+    result = await lerobot_record_service.start(
+        target_maturity=target_maturity,
+        robot_model=robot_model,
+    )
     await task_state.set_policy_status(lerobot_record_service.status())
 
     if not result.success:
@@ -39,7 +43,7 @@ async def execute_task(mode: ExecutionMode) -> Tuple[bool, str]:
         await push_ui_state(ExecutionMode.robot_pc)
         return False, result.message
 
-    await task_state.start_running("LeRobot record policy process running")
+    await task_state.start_running("LeRobot script process running")
     await task_state.add_log(result.message)
     await push_ui_state(ExecutionMode.robot_pc)
     return True, result.message

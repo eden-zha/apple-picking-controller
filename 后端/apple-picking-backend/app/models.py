@@ -17,6 +17,11 @@ class TargetMaturity(str, Enum):
     yellow = "yellow"
 
 
+class RobotModel(str, Enum):
+    model_a = "model_a"
+    model_b = "model_b"
+
+
 class ExecutionMode(str, Enum):
     robot_pc = "robot_pc"
 
@@ -55,6 +60,7 @@ class StatusResponse(BaseModel):
     progress: int = Field(ge=0, le=100)
     message: str
     target_maturity: Optional[TargetMaturity] = None
+    robot_model: RobotModel = RobotModel.model_a
     current_step: str
     logs: List[str]
     robot_status: RobotStatus = Field(default_factory=RobotStatus)
@@ -66,6 +72,7 @@ class UIStateResponse(BaseModel):
     progress: int = Field(ge=0, le=100)
     mode: ExecutionMode
     target_maturity: Optional[TargetMaturity] = None
+    robot_model: RobotModel = RobotModel.model_a
     logs: List[str]
     robot_status: RobotStatus
     policy_status: PolicyStatus
@@ -88,3 +95,7 @@ class TaskCommandRequest(BaseModel):
 
 class TargetAppleRequest(BaseModel):
     target_maturity: TargetMaturity
+
+
+class RobotModelRequest(BaseModel):
+    robot_model: RobotModel

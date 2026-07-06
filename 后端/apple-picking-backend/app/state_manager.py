@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 
 from app.adapters.robot_client import RawRobotState
-from app.models import ExecutionMode, PolicyStatus, RobotStatus, StatusResponse, TargetMaturity, TaskState
+from app.models import ExecutionMode, PolicyStatus, RobotModel, RobotStatus, StatusResponse, TargetMaturity, TaskState
 
 
 class StateManager:
@@ -14,6 +14,7 @@ class StateManager:
         self._message = "Waiting for task start."
         self._mode = ExecutionMode.robot_pc
         self._target_maturity = None  # type: Optional[TargetMaturity]
+        self._robot_model = RobotModel.model_a
         self._current_step = "Waiting"
         self._robot_status = RobotStatus(source="unavailable")
         self._policy_status = PolicyStatus()
@@ -39,6 +40,7 @@ class StateManager:
             progress=self._progress,
             message=self._message,
             target_maturity=self._target_maturity,
+            robot_model=self._robot_model,
             current_step=self._current_step,
             logs=list(self._logs),
             robot_status=self._robot_status,
@@ -84,8 +86,9 @@ class StateManager:
             self._progress = 0
             self._current_step = current_step
             target = self._target_maturity.value if self._target_maturity else "unset"
-            self._message = f"Task running with target_maturity={target}."
-            self.add_log_sync(f"Task entered RUNNING on robot PC, target_maturity={target}.")
+            robot_model = self._robot_model.value
+            self._message = f"Task running with target_maturity={target}, robot_model={robot_model}."
+            self.add_log_sync(f"Task entered RUNNING on robot PC, target_maturity={target}, robot_model={robot_model}.")
 
     async def set_mode(self, mode: ExecutionMode) -> None:
         async with self._lock:
@@ -189,6 +192,14 @@ class StateManager:
         async with self._lock:
             self._target_maturity = target_maturity
             self.add_log_sync(f"target_maturity set to {target_maturity.value}.")
+
+    def get_robot_model(self) -> RobotModel:
+        return self._robot_model
+
+    async def set_robot_model(self, robot_model: RobotModel) -> None:
+        async with self._lock:
+            self._robot_model = robot_model
+            self.add_log_sync(f"robot_model set to {robot_model.value}.")
 
 
 task_state = StateManager()
