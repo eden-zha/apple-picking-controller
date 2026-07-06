@@ -125,6 +125,7 @@ export default function App() {
     total: 0,
     red: 0,
     yellow: 0,
+    green: 0,
     fps: 0,
     status: "stopped",
     apple_list: [],
@@ -205,7 +206,7 @@ export default function App() {
 
     return subscribeVision({
       onMessage: (data) => {
-        setVisionStatus(data);
+        setVisionStatus({ green: 0, ...data });
         setApiError("");
       },
       onError: () => {
@@ -821,11 +822,12 @@ export default function App() {
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-4">
             {[
               ["苹果总数", visionStatus.total, Apple, "text-white"],
               ["红苹果", visionStatus.red, Apple, "text-red-300"],
               ["黄苹果", visionStatus.yellow, Apple, "text-yellow-200"],
+              ["绿苹果", visionStatus.green, Apple, "text-green-300"],
             ].map(([name, value, Icon, color]) => (
               <div key={name} className="rounded-2xl border border-white/10 bg-black/20 p-5">
                 <Icon className={`mb-4 h-7 w-7 ${color}`} />
