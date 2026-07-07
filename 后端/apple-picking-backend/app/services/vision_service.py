@@ -1,5 +1,4 @@
-import asyncio
-import math
+﻿import asyncio
 import os
 import time
 from pathlib import Path
@@ -9,8 +8,8 @@ from app.models import VisionStatus
 from app.websocket_manager import WebSocketManager
 
 
-DEFAULT_CAMERA_INDEX = 0
-DEFAULT_PUSH_INTERVAL_SECONDS = 0.5
+DEFAULT_CAMERA_INDEX = 1
+DEFAULT_PUSH_INTERVAL_SECONDS = 3.0
 YOLO_CONFIDENCE_THRESHOLD = 0.25
 
 
@@ -21,57 +20,85 @@ class VisionService:
         self._camera = None
         self._loop_task = None  # type: Optional[asyncio.Task]
         self._running = False
-        self._fallback = False
+        self._suspended = False
         self._last_error = None  # type: Optional[str]
         self._last_frame_at = None  # type: Optional[float]
+        self._backend_dir = Path(__file__).resolve().parents[2]
+        self._debug_image_path = self._backend_dir / "logs" / "yolo_debug.jpg"
+        self._printed_model_names = False
         self._snapshot = VisionStatus()
         self._lock = asyncio.Lock()
 
     def snapshot(self) -> VisionStatus:
         return self._snapshot
 
+    def is_suspended(self) -> bool:
+        return self._suspended
+
     async def start(self) -> None:
         async with self._lock:
+            if self._suspended:
+                return
             if self._loop_task is not None and not self._loop_task.done():
                 self._running = True
                 self._snapshot.status = "running"
                 return
 
             self._running = True
-            self._fallback = False
             self._last_error = None
+            self._last_frame_at = None
             self._snapshot = VisionStatus(status="running")
             self._loop_task = asyncio.create_task(self._run_loop())
+
+    async def resume(self) -> None:
+        async with self._lock:
+            self._suspended = False
+        await self.start()
+
+    async def suspend(self) -> None:
+        async with self._lock:
+            self._suspended = True
+        await self.stop()
 
     async def stop(self) -> None:
         async with self._lock:
             self._running = False
-            self._snapshot.status = "stopped"
-            if self._loop_task is not None:
-                self._loop_task.cancel()
-                self._loop_task = None
+            self._snapshot = VisionStatus(status="stopped")
+            task = self._loop_task
+            self._loop_task = None
             await asyncio.to_thread(self._release_camera)
+
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
         await self.websocket_manager.broadcast(_payload(self._snapshot))
 
     async def _run_loop(self) -> None:
         try:
             await asyncio.to_thread(self._initialize_real_pipeline)
         except Exception as exc:
-            self._enter_fallback(f"vision fallback enabled: {exc}")
+            self._mark_unavailable(f"vision unavailable: {exc}")
+            self._running = False
+            await self.websocket_manager.broadcast(_payload(self._snapshot))
+            return
 
         while self._running:
             started_at = time.perf_counter()
-            if self._fallback:
-                snapshot = self._mock_snapshot()
-            else:
-                try:
-                    snapshot = await asyncio.to_thread(self._infer_once)
-                except Exception as exc:
-                    self._enter_fallback(f"vision inference failed: {exc}")
-                    snapshot = self._mock_snapshot()
+            try:
+                snapshot = await asyncio.to_thread(self._infer_once)
+            except Exception as exc:
+                self._mark_unavailable(f"vision inference failed: {exc}")
+                self._running = False
+                snapshot = self._snapshot
 
             self._snapshot = snapshot
             await self.websocket_manager.broadcast(_payload(snapshot))
+            if not self._running:
+                break
             elapsed = time.perf_counter() - started_at
             await asyncio.sleep(max(0.0, DEFAULT_PUSH_INTERVAL_SECONDS - elapsed))
 
@@ -90,6 +117,10 @@ class VisionService:
             raise RuntimeError("ultralytics is not installed") from exc
 
         self._model = YOLO(str(model_path))
+        if not self._printed_model_names:
+            print(f"[vision] YOLO model_path={model_path}", flush=True)
+            print(f"[vision] YOLO model.names={getattr(self._model, 'names', None)}", flush=True)
+            self._printed_model_names = True
 
     def _open_camera(self) -> None:
         if self._camera is not None:
@@ -123,51 +154,72 @@ class VisionService:
         self._last_frame_at = now
 
         results = self._model(frame, verbose=False)
+        _print_raw_detections(results)
+        self._save_debug_frame(frame, results)
         apple_list = _extract_apples(results)
         red = sum(1 for apple in apple_list if apple.get("color") == "red")
         yellow = sum(1 for apple in apple_list if apple.get("color") == "yellow")
+        green = sum(1 for apple in apple_list if apple.get("color") == "green")
 
         return VisionStatus(
             total=len(apple_list),
             red=red,
             yellow=yellow,
+            green=green,
             fps=fps,
             status="running",
             apple_list=apple_list,
         )
 
-    def _enter_fallback(self, error: str) -> None:
-        self._fallback = True
+    def _mark_unavailable(self, error: str) -> None:
         self._last_error = error
         self._release_camera()
+        self._snapshot = VisionStatus(status="unavailable")
+
+    def _save_debug_frame(self, frame: Any, results: Any) -> None:
+        try:
+            import cv2
+
+            self._debug_image_path.parent.mkdir(parents=True, exist_ok=True)
+            annotated = frame.copy()
+            if results:
+                first = results[0]
+                boxes = getattr(first, "boxes", None)
+                names = getattr(first, "names", {}) or {}
+                if boxes is not None:
+                    for box in boxes:
+                        confidence = float(box.conf[0]) if getattr(box, "conf", None) is not None else 0.0
+                        class_id = int(box.cls[0]) if getattr(box, "cls", None) is not None else -1
+                        class_name = str(names.get(class_id, class_id))
+                        xyxy = box.xyxy[0].tolist() if getattr(box, "xyxy", None) is not None else []
+                        if len(xyxy) != 4:
+                            continue
+                        x1, y1, x2, y2 = [int(round(float(value))) for value in xyxy]
+                        color = _debug_box_color(class_name)
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                        label = f"{class_name} {confidence:.2f}"
+                        (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+                        label_y1 = max(0, y1 - text_h - baseline - 4)
+                        cv2.rectangle(annotated, (x1, label_y1), (x1 + text_w + 6, label_y1 + text_h + baseline + 4), color, -1)
+                        cv2.putText(
+                            annotated,
+                            label,
+                            (x1 + 3, label_y1 + text_h + 1),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.55,
+                            (255, 255, 255),
+                            2,
+                            cv2.LINE_AA,
+                        )
+            cv2.imwrite(str(self._debug_image_path), annotated)
+            print(f"[vision] saved annotated debug frame: {self._debug_image_path}", flush=True)
+        except Exception as exc:
+            print(f"[vision] failed to save debug frame: {type(exc).__name__}: {exc}", flush=True)
 
     def _release_camera(self) -> None:
         if self._camera is not None:
             self._camera.release()
             self._camera = None
-
-    def _mock_snapshot(self) -> VisionStatus:
-        tick = time.monotonic()
-        red = 2 + int((math.sin(tick / 2.0) + 1) * 2)
-        yellow = 1 + int((math.cos(tick / 2.8) + 1) * 1.5)
-        apple_list = [
-            {
-                "id": f"fallback-{index + 1}",
-                "color": "red" if index < red else "yellow",
-                "confidence": 0.82,
-                "bbox": [20 + index * 18, 40, 80 + index * 18, 110],
-                "source": "mock_fallback",
-            }
-            for index in range(red + yellow)
-        ]
-        return VisionStatus(
-            total=red + yellow,
-            red=red,
-            yellow=yellow,
-            fps=12.0,
-            status="fallback",
-            apple_list=apple_list,
-        )
 
 
 def _find_yolo_model_path() -> Path:
@@ -189,6 +241,47 @@ def _find_yolo_model_path() -> Path:
             return path
 
     raise RuntimeError("YOLO model not found. Set YOLO_MODEL_PATH or place best.pt in the backend working directory.")
+
+
+def _debug_box_color(class_name: str) -> tuple[int, int, int]:
+    color = _class_to_color(class_name.lower())
+    if color == "red":
+        return (0, 0, 255)
+    if color == "yellow":
+        return (0, 220, 255)
+    if color == "green":
+        return (0, 180, 0)
+    return (255, 255, 255)
+
+
+def _print_raw_detections(results: Any) -> None:
+    if not results:
+        print("[vision] raw detections=[]", flush=True)
+        return
+
+    first = results[0]
+    boxes = getattr(first, "boxes", None)
+    names = getattr(first, "names", {}) or {}
+    if boxes is None:
+        print("[vision] raw detections boxes=None", flush=True)
+        return
+
+    count = 0
+    for box in boxes:
+        confidence = float(box.conf[0]) if getattr(box, "conf", None) is not None else 0.0
+        class_id = int(box.cls[0]) if getattr(box, "cls", None) is not None else -1
+        class_name = str(names.get(class_id, class_id))
+        xyxy = box.xyxy[0].tolist() if getattr(box, "xyxy", None) is not None else []
+        bbox = [round(float(value), 2) for value in xyxy]
+        print(
+            f"[vision] raw detection class_id={class_id} class_name={class_name} "
+            f"conf={confidence:.3f} bbox={bbox}",
+            flush=True,
+        )
+        count += 1
+
+    if count == 0:
+        print("[vision] raw detections=[]", flush=True)
 
 
 def _extract_apples(results: Any) -> list[dict]:
@@ -227,10 +320,12 @@ def _extract_apples(results: Any) -> list[dict]:
 
 
 def _class_to_color(class_name: str) -> Optional[str]:
+    if "green" in class_name:
+        return "green"
+    if "yellow" in class_name or "half" in class_name or "unripe" in class_name or class_name == "1":
+        return "yellow"
     if "red" in class_name or "ripe" in class_name or class_name in {"0", "apple"}:
         return "red"
-    if "yellow" in class_name or "unripe" in class_name or "half" in class_name or class_name == "1":
-        return "yellow"
     return None
 
 

@@ -50,6 +50,7 @@ class VisionStatus(BaseModel):
     total: int = 0
     red: int = 0
     yellow: int = 0
+    green: int = 0
     fps: float = 0
     status: str = "stopped"
     apple_list: List[dict] = Field(default_factory=list)
