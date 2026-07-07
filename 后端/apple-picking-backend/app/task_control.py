@@ -1,11 +1,16 @@
+﻿import asyncio
 from typing import Optional, Tuple
 
 from app.adapters.robot_client import RawRobotState
 from app.models import ExecutionMode
 from app.services.lerobot_record_service import lerobot_record_service
+from app.services.vision_service import vision_service
 from app.status_fusion import build_ui_state
 from app.state_manager import task_state
 from app.websocket_manager import websocket_manager
+
+
+_vision_restore_task: Optional[asyncio.Task] = None
 
 
 def _ui_state_payload(ui_state) -> dict:
@@ -22,6 +27,22 @@ async def push_ui_state(
     await websocket_manager.broadcast(_ui_state_payload(ui_state))
 
 
+def schedule_vision_restore_when_lerobot_exits() -> None:
+    global _vision_restore_task
+    if _vision_restore_task is not None and not _vision_restore_task.done():
+        return
+    _vision_restore_task = asyncio.create_task(_restore_vision_when_lerobot_exits())
+
+
+async def _restore_vision_when_lerobot_exits() -> None:
+    while lerobot_record_service.status().running:
+        await asyncio.sleep(1)
+
+    await asyncio.sleep(0.75)
+    await vision_service.resume()
+    await push_ui_state(ExecutionMode.robot_pc)
+
+
 async def execute_task(mode: ExecutionMode) -> Tuple[bool, str]:
     await task_state.set_mode(ExecutionMode.robot_pc)
     can_start, message = await task_state.can_start()
@@ -29,6 +50,9 @@ async def execute_task(mode: ExecutionMode) -> Tuple[bool, str]:
         await task_state.add_log(message)
         await push_ui_state(ExecutionMode.robot_pc)
         return False, message
+
+    await vision_service.suspend()
+    await asyncio.sleep(0.25)
 
     target_maturity = task_state.get_target_maturity()
     robot_model = task_state.get_robot_model()
@@ -39,10 +63,12 @@ async def execute_task(mode: ExecutionMode) -> Tuple[bool, str]:
     await task_state.set_policy_status(lerobot_record_service.status())
 
     if not result.success:
+        await vision_service.resume()
         await task_state.mark_error(result.message)
         await push_ui_state(ExecutionMode.robot_pc)
         return False, result.message
 
+    schedule_vision_restore_when_lerobot_exits()
     await task_state.start_running("LeRobot script process running")
     await task_state.add_log(result.message)
     await push_ui_state(ExecutionMode.robot_pc)
@@ -52,6 +78,8 @@ async def execute_task(mode: ExecutionMode) -> Tuple[bool, str]:
 async def stop_robot_task(mode: ExecutionMode = ExecutionMode.robot_pc) -> Tuple[bool, str]:
     await task_state.set_mode(ExecutionMode.robot_pc)
     result = await lerobot_record_service.stop()
+    await asyncio.sleep(0.75)
+    await vision_service.resume()
     await task_state.set_policy_status(lerobot_record_service.status())
     stopped, local_message = await task_state.stop()
     await push_ui_state(ExecutionMode.robot_pc)

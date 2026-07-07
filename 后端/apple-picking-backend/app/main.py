@@ -10,7 +10,7 @@ from app.status_fusion import build_ui_state
 from app.services.lerobot_record_service import lerobot_record_service
 from app.services.vision_service import vision_service
 from app.state_manager import task_state
-from app.task_control import execute_task, push_ui_state, stop_robot_task
+from app.task_control import execute_task, push_ui_state, schedule_vision_restore_when_lerobot_exits, stop_robot_task
 from app.websocket_manager import websocket_manager
 
 
@@ -30,6 +30,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+
+
+@app.on_event("startup")
+async def start_idle_vision_service() -> None:
+    await vision_service.resume()
 
 
 def ui_state_payload(ui_state: UIStateResponse) -> dict:
@@ -125,10 +132,16 @@ async def start_local_policy_runtime(request: Optional[TargetAppleRequest] = Non
     target_maturity = request.target_maturity if request is not None else task_state.get_target_maturity()
     if request is not None:
         await task_state.set_target_maturity(request.target_maturity)
+    await vision_service.suspend()
+    await asyncio.sleep(0.25)
     result = await lerobot_record_service.start(
         target_maturity=target_maturity,
         robot_model=task_state.get_robot_model(),
     )
+    if result.success:
+        schedule_vision_restore_when_lerobot_exits()
+    else:
+        await vision_service.resume()
     await task_state.set_policy_status(lerobot_record_service.status())
     return {
         "success": result.success,
@@ -140,7 +153,8 @@ async def start_local_policy_runtime(request: Optional[TargetAppleRequest] = Non
 @app.post("/policy/stop")
 async def stop_local_policy_runtime() -> dict:
     result = await lerobot_record_service.stop()
-    await vision_service.stop()
+    await asyncio.sleep(0.75)
+    await vision_service.resume()
     await task_state.set_policy_status(lerobot_record_service.status())
     return {
         "success": result.success,
@@ -174,7 +188,8 @@ async def get_vision_status() -> VisionStatus:
 @app.post("/reset", response_model=CommandResponse)
 async def reset_system() -> CommandResponse:
     await lerobot_record_service.stop()
-    await vision_service.stop()
+    await asyncio.sleep(0.75)
+    await vision_service.resume()
     await task_state.reset()
     await push_ui_state(task_state.get_mode())
     return CommandResponse(success=True, message="System reset.", status=build_ui_state())
