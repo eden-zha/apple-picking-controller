@@ -9,7 +9,7 @@ from app.models import VisionStatus
 from app.websocket_manager import WebSocketManager
 
 
-DEFAULT_CAMERA_INDEX = 0
+DEFAULT_YOLO_CAMERA_INDEX = 1
 DEFAULT_PUSH_INTERVAL_SECONDS = 0.5
 YOLO_CONFIDENCE_THRESHOLD = 0.25
 
@@ -100,7 +100,7 @@ class VisionService:
         except Exception as exc:
             raise RuntimeError("opencv-python is not installed") from exc
 
-        camera_index = int(os.getenv("CAMERA_INDEX", DEFAULT_CAMERA_INDEX))
+        camera_index = int(os.getenv("YOLO_CAMERA_INDEX") or os.getenv("CAMERA_INDEX") or DEFAULT_YOLO_CAMERA_INDEX)
         camera = cv2.VideoCapture(camera_index)
         if not camera.isOpened():
             raise RuntimeError(f"USB camera open failed: index={camera_index}")
@@ -126,11 +126,13 @@ class VisionService:
         apple_list = _extract_apples(results)
         red = sum(1 for apple in apple_list if apple.get("color") == "red")
         yellow = sum(1 for apple in apple_list if apple.get("color") == "yellow")
+        green = sum(1 for apple in apple_list if apple.get("color") == "green")
 
         return VisionStatus(
             total=len(apple_list),
             red=red,
             yellow=yellow,
+            green=green,
             fps=fps,
             status="running",
             apple_list=apple_list,
@@ -150,20 +152,22 @@ class VisionService:
         tick = time.monotonic()
         red = 2 + int((math.sin(tick / 2.0) + 1) * 2)
         yellow = 1 + int((math.cos(tick / 2.8) + 1) * 1.5)
+        green = 1 + int((math.sin(tick / 3.4) + 1) * 1.5)
         apple_list = [
             {
                 "id": f"fallback-{index + 1}",
-                "color": "red" if index < red else "yellow",
+                "color": _mock_apple_color(index, red, yellow),
                 "confidence": 0.82,
                 "bbox": [20 + index * 18, 40, 80 + index * 18, 110],
                 "source": "mock_fallback",
             }
-            for index in range(red + yellow)
+            for index in range(red + yellow + green)
         ]
         return VisionStatus(
-            total=red + yellow,
+            total=red + yellow + green,
             red=red,
             yellow=yellow,
+            green=green,
             fps=12.0,
             status="fallback",
             apple_list=apple_list,
@@ -227,11 +231,21 @@ def _extract_apples(results: Any) -> list[dict]:
 
 
 def _class_to_color(class_name: str) -> Optional[str]:
+    if "green" in class_name or "unripe" in class_name or class_name == "2":
+        return "green"
+    if "yellow" in class_name or "half" in class_name or class_name == "1":
+        return "yellow"
     if "red" in class_name or "ripe" in class_name or class_name in {"0", "apple"}:
         return "red"
-    if "yellow" in class_name or "unripe" in class_name or "half" in class_name or class_name == "1":
-        return "yellow"
     return None
+
+
+def _mock_apple_color(index: int, red_count: int, yellow_count: int) -> str:
+    if index < red_count:
+        return "red"
+    if index < red_count + yellow_count:
+        return "yellow"
+    return "green"
 
 
 def _payload(snapshot: VisionStatus) -> dict:

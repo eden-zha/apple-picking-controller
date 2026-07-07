@@ -164,7 +164,7 @@ export default function App() {
     }
 
     if (nextStatus.vision_status) {
-      setVisionStatus(nextStatus.vision_status);
+      setVisionStatus({ green: 0, ...nextStatus.vision_status });
     }
 
     const pendingInteraction = nextStatus.policy_status?.pending_interaction;

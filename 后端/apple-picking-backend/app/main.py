@@ -86,6 +86,16 @@ async def vision_websocket(websocket: WebSocket) -> None:
         vision_service.websocket_manager.disconnect(websocket)
 
 
+@app.on_event("startup")
+async def start_vision_service() -> None:
+    await vision_service.start()
+
+
+@app.on_event("shutdown")
+async def stop_vision_service() -> None:
+    await vision_service.stop()
+
+
 @app.post("/set_target_apple", response_model=CommandResponse)
 async def set_target_apple(request: TargetAppleRequest) -> CommandResponse:
     await task_state.set_target_maturity(request.target_maturity)
@@ -140,7 +150,6 @@ async def start_local_policy_runtime(request: Optional[TargetAppleRequest] = Non
 @app.post("/policy/stop")
 async def stop_local_policy_runtime() -> dict:
     result = await lerobot_record_service.stop()
-    await vision_service.stop()
     await task_state.set_policy_status(lerobot_record_service.status())
     return {
         "success": result.success,
@@ -174,7 +183,6 @@ async def get_vision_status() -> VisionStatus:
 @app.post("/reset", response_model=CommandResponse)
 async def reset_system() -> CommandResponse:
     await lerobot_record_service.stop()
-    await vision_service.stop()
     await task_state.reset()
     await push_ui_state(task_state.get_mode())
     return CommandResponse(success=True, message="System reset.", status=build_ui_state())
